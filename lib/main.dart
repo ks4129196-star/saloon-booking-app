@@ -30,8 +30,10 @@
 
 import 'dart:math' as math;
 
+import 'package:flutter_first_app/auth/auth_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 // ----------------------------- Design tokens ---------------------------------
@@ -388,10 +390,33 @@ List<Salon> buildSampleSalons() {
 
 // --------------------------------- App ---------------------------------------
 
-void main() => runApp(const MyApp());
+const _supabaseUrl = String.fromEnvironment(
+  'SUPABASE_URL',
+  defaultValue: 'https://zszfdqppfsstzrluzvhj.supabase.co',
+);
+const _supabasePublishableKey =
+    String.fromEnvironment(
+      'SUPABASE_PUBLISHABLE_KEY',
+      defaultValue: 'sb_publishable_Qy5iqG9GJHEp778w17gz8Q_Ow0DEBHW',
+    );
+const _supabaseConfigured =
+    _supabaseUrl != '' && _supabasePublishableKey != '';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (_supabaseConfigured) {
+    await Supabase.initialize(
+      url: _supabaseUrl,
+      publishableKey: _supabasePublishableKey,
+    );
+  }
+  runApp(const MyApp(supabaseConfigured: _supabaseConfigured));
+}
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.supabaseConfigured = true});
+
+  final bool supabaseConfigured;
 
   @override
   Widget build(BuildContext context) {
@@ -412,9 +437,10 @@ class MyApp extends StatelessWidget {
           elevation: 0,
           centerTitle: false,
           titleTextStyle: TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 20,
-              fontWeight: FontWeight.w700),
+            color: AppColors.textPrimary,
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+          ),
         ),
         cardTheme: CardThemeData(
           color: AppColors.card,
@@ -438,7 +464,61 @@ class MyApp extends StatelessWidget {
           bodySmall: TextStyle(color: AppColors.textSecondary),
         ),
       ),
-      home: const HomeScreen(),
+      home: supabaseConfigured
+          ? AuthScreen(destinationBuilder: () => const HomeScreen())
+          : const SupabaseConfigurationScreen(),
+    );
+  }
+}
+
+class SupabaseConfigurationScreen extends StatelessWidget {
+  const SupabaseConfigurationScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(AppSpacing.l),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: 460),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.content_cut_rounded,
+                    color: AppColors.gold,
+                    size: 42,
+                  ),
+                  SizedBox(height: AppSpacing.m),
+                  Text(
+                    'Connect your Supabase project',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  SizedBox(height: AppSpacing.s),
+                  Text(
+                    'Run the app with SUPABASE_URL and '
+                    'SUPABASE_PUBLISHABLE_KEY '
+                    'configured using --dart-define. See README.md for setup.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      height: 1.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -491,8 +571,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         if (perm == LocationPermission.denied ||
             perm == LocationPermission.deniedForever) {
-          _locationNote =
-              'Location permission denied, showing salons around a demo location.';
+          _locationNote = 'Location permission denied, showing salons around a demo location.';
         } else {
           final pos = await Geolocator.getCurrentPosition(
             locationSettings: const LocationSettings(
@@ -530,8 +609,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       if (_query.trim().isNotEmpty) {
         final q = _query.toLowerCase();
-        final inServices =
-            s.services.any((e) => e.name.toLowerCase().contains(q));
+        final inServices = s.services.any(
+          (e) => e.name.toLowerCase().contains(q),
+        );
         if (!s.name.toLowerCase().contains(q) &&
             !s.type.toLowerCase().contains(q) &&
             !inServices) {
@@ -571,7 +651,8 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: _loading
             ? const Center(
-                child: CircularProgressIndicator(color: AppColors.gold))
+                child: CircularProgressIndicator(color: AppColors.gold),
+              )
             : _buildList(now),
       ),
     );
@@ -586,14 +667,21 @@ class _HomeScreenState extends State<HomeScreen> {
             width: double.infinity,
             color: AppColors.warning.withValues(alpha: 0.15),
             padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.m, vertical: AppSpacing.s),
-            child: Text(_locationNote,
-                style: const TextStyle(
-                    color: AppColors.warning, fontSize: 12.5)),
+              horizontal: AppSpacing.m,
+              vertical: AppSpacing.s,
+            ),
+            child: Text(
+              _locationNote,
+              style: const TextStyle(color: AppColors.warning, fontSize: 12.5),
+            ),
           ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
-              AppSpacing.m, AppSpacing.s, AppSpacing.m, AppSpacing.s),
+            AppSpacing.m,
+            AppSpacing.s,
+            AppSpacing.m,
+            AppSpacing.s,
+          ),
           child: TextField(
             onChanged: (v) => setState(() => _query = v),
             decoration: InputDecoration(
@@ -615,20 +703,34 @@ class _HomeScreenState extends State<HomeScreen> {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.m),
             children: [
-              _chip('Nearest', _sort == SortBy.nearest,
-                  () => setState(() => _sort = SortBy.nearest)),
-              _chip('Least wait', _sort == SortBy.leastWait,
-                  () => setState(() => _sort = SortBy.leastWait)),
-              _chip('Open now', _openNowOnly,
-                  () => setState(() => _openNowOnly = !_openNowOnly)),
-              _chip('Wait under 15 min', _lowWaitOnly,
-                  () => setState(() => _lowWaitOnly = !_lowWaitOnly)),
+              _chip(
+                'Nearest',
+                _sort == SortBy.nearest,
+                () => setState(() => _sort = SortBy.nearest),
+              ),
+              _chip(
+                'Least wait',
+                _sort == SortBy.leastWait,
+                () => setState(() => _sort = SortBy.leastWait),
+              ),
+              _chip(
+                'Open now',
+                _openNowOnly,
+                () => setState(() => _openNowOnly = !_openNowOnly),
+              ),
+              _chip(
+                'Wait under 15 min',
+                _lowWaitOnly,
+                () => setState(() => _lowWaitOnly = !_lowWaitOnly),
+              ),
             ],
           ),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.m, vertical: AppSpacing.s),
+            horizontal: AppSpacing.m,
+            vertical: AppSpacing.s,
+          ),
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
@@ -643,16 +745,24 @@ class _HomeScreenState extends State<HomeScreen> {
             backgroundColor: AppColors.surface,
             onRefresh: () async => setState(() {}),
             child: list.isEmpty
-                ? ListView(children: const [
-                    SizedBox(height: 120),
-                    Center(
-                      child: Text('No salons match your filters.',
-                          style: TextStyle(color: AppColors.textSecondary)),
-                    ),
-                  ])
+                ? ListView(
+                    children: const [
+                      SizedBox(height: 120),
+                      Center(
+                        child: Text(
+                          'No salons match your filters.',
+                          style: TextStyle(color: AppColors.textSecondary),
+                        ),
+                      ),
+                    ],
+                  )
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.m, 0, AppSpacing.m, AppSpacing.l),
+                      AppSpacing.m,
+                      0,
+                      AppSpacing.m,
+                      AppSpacing.l,
+                    ),
                     itemCount: list.length,
                     separatorBuilder: (_, _) =>
                         const SizedBox(height: AppSpacing.s + 4),
@@ -663,7 +773,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         await Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (_) => SalonDetailPage(salon: list[i])),
+                            builder: (_) => SalonDetailPage(salon: list[i]),
+                          ),
                         );
                         if (mounted) setState(() {});
                       },
@@ -728,9 +839,14 @@ class WaitBadge extends StatelessWidget {
         color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(AppRadius.chip),
       ),
-      child: Text(text,
-          style: TextStyle(
-              color: color, fontWeight: FontWeight.w700, fontSize: 12.5)),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w700,
+          fontSize: 12.5,
+        ),
+      ),
     );
   }
 }
@@ -742,8 +858,12 @@ class SalonCard extends StatelessWidget {
   final DateTime now;
   final VoidCallback onTap;
 
-  const SalonCard(
-      {super.key, required this.salon, required this.now, required this.onTap});
+  const SalonCard({
+    super.key,
+    required this.salon,
+    required this.now,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -762,61 +882,85 @@ class SalonCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Text(salon.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 16.5, fontWeight: FontWeight.w700)),
+                    child: Text(
+                      salon.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                   WaitBadge(salon: salon, now: now),
                 ],
               ),
               const SizedBox(height: 2),
-              Text(salon.type,
-                  style:
-                      const TextStyle(color: AppColors.gold, fontSize: 12.5)),
+              Text(
+                salon.type,
+                style: const TextStyle(color: AppColors.gold, fontSize: 12.5),
+              ),
               const SizedBox(height: AppSpacing.s),
               Row(
                 children: [
                   const Icon(Icons.star, size: 16, color: AppColors.gold),
                   const SizedBox(width: 3),
-                  Text('${salon.rating} (${salon.reviews})',
-                      style: const TextStyle(fontSize: 13)),
+                  Text(
+                    '${salon.rating} (${salon.reviews})',
+                    style: const TextStyle(fontSize: 13),
+                  ),
                   const SizedBox(width: AppSpacing.m),
-                  const Icon(Icons.near_me,
-                      size: 15, color: AppColors.textSecondary),
+                  const Icon(
+                    Icons.near_me,
+                    size: 15,
+                    color: AppColors.textSecondary,
+                  ),
                   const SizedBox(width: 3),
-                  Text(fmtDistance(salon.distance),
-                      style: const TextStyle(fontSize: 13)),
+                  Text(
+                    fmtDistance(salon.distance),
+                    style: const TextStyle(fontSize: 13),
+                  ),
                   const SizedBox(width: AppSpacing.m),
-                  Text('From ₹${salon.minPrice}',
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.textSecondary)),
+                  Text(
+                    'From ₹${salon.minPrice}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: AppSpacing.s),
-              Text(salon.address,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: AppColors.textSecondary, fontSize: 13)),
+              Text(
+                salon.address,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                ),
+              ),
               const SizedBox(height: AppSpacing.xs + 2),
               Row(
                 children: [
-                  Icon(Icons.schedule,
-                      size: 14,
-                      color: open ? AppColors.success : AppColors.error),
+                  Icon(
+                    Icons.schedule,
+                    size: 14,
+                    color: open ? AppColors.success : AppColors.error,
+                  ),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       open
                           ? 'Open until ${fmtMinutes(salon.closeMin)}'
-                              '${nextFree.isNotEmpty ? ' • next free slot ${fmtDateTime(nextFree.first.start)}' : ' • no free slots today'}'
+                                '${nextFree.isNotEmpty ? ' • next free slot ${fmtDateTime(nextFree.first.start)}' : ' • no free slots today'}'
                           : 'Closed • opens ${fmtMinutes(salon.openMin)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          color: AppColors.textSecondary, fontSize: 12.5),
+                        color: AppColors.textSecondary,
+                        fontSize: 12.5,
+                      ),
                     ),
                   ),
                 ],
@@ -851,9 +995,9 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
   Future<void> _open(Uri uri) async {
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open this link')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not open this link')));
     }
   }
 
@@ -867,29 +1011,35 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(s.name,
-                style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(s.name, style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: AppSpacing.s),
             Text('Today at ${fmtDateTime(slot.start)}'),
             const SizedBox(height: AppSpacing.s),
             ..._selected.map((e) => Text('• ${e.name}  ₹${e.price}')),
             const Divider(),
-            Text('Total: ₹$_total  (~$_minutes min)',
-                style: const TextStyle(
-                    color: AppColors.gold, fontWeight: FontWeight.w700)),
+            Text(
+              'Total: ₹$_total  (~$_minutes min)',
+              style: const TextStyle(
+                color: AppColors.gold,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             const SizedBox(height: AppSpacing.s),
-            const Text('Pay at the salon. Demo booking only.',
-                style:
-                    TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+            const Text(
+              'Pay at the salon. Demo booking only.',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
           ],
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Confirm')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm'),
+          ),
         ],
       ),
     );
@@ -900,9 +1050,9 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
         _slotKey = null;
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Booked at ${fmtDateTime(slot.start)} 🎉'),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Booked at ${fmtDateTime(slot.start)} 🎉')),
+        );
       }
     }
   }
@@ -940,17 +1090,23 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                        _selected.isEmpty
-                            ? 'Select services'
-                            : '₹$_total  •  ~$_minutes min',
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w700)),
+                      _selected.isEmpty
+                          ? 'Select services'
+                          : '₹$_total  •  ~$_minutes min',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     Text(
-                        chosen == null
-                            ? 'Pick a time slot'
-                            : 'Today ${fmtDateTime(chosen.start)}',
-                        style: const TextStyle(
-                            color: AppColors.textSecondary, fontSize: 12.5)),
+                      chosen == null
+                          ? 'Pick a time slot'
+                          : 'Today ${fmtDateTime(chosen.start)}',
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12.5,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -958,7 +1114,9 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                 onPressed: canBook ? () => _book(chosen!) : null,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.l, vertical: 14),
+                    horizontal: AppSpacing.l,
+                    vertical: 14,
+                  ),
                 ),
                 child: const Text('Book slot'),
               ),
@@ -980,12 +1138,15 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
             ],
           ),
           const SizedBox(height: AppSpacing.s),
-          Text(s.address,
-              style: const TextStyle(color: AppColors.textSecondary)),
+          Text(
+            s.address,
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
           const SizedBox(height: 4),
           Text(
-              '${fmtDistance(s.distance)} away • ${fmtMinutes(s.openMin)} - ${fmtMinutes(s.closeMin)}',
-              style: const TextStyle(color: AppColors.textSecondary)),
+            '${fmtDistance(s.distance)} away • ${fmtMinutes(s.openMin)} - ${fmtMinutes(s.closeMin)}',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
           const SizedBox(height: AppSpacing.m),
 
           // Live status card
@@ -998,9 +1159,13 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Right now',
-                            style: TextStyle(
-                                color: AppColors.textSecondary, fontSize: 12)),
+                        const Text(
+                          'Right now',
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
                         const SizedBox(height: 4),
                         WaitBadge(salon: s, now: now),
                       ],
@@ -1021,8 +1186,11 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.directions),
                   label: const Text('Directions'),
-                  onPressed: () => _open(Uri.parse(
-                      'https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lon}')),
+                  onPressed: () => _open(
+                    Uri.parse(
+                      'https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lon}',
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: AppSpacing.s),
@@ -1050,30 +1218,37 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
               spacing: AppSpacing.s,
               runSpacing: AppSpacing.s,
               children: s.highlights
-                  .map((h) => Chip(
-                        label: Text(h),
-                        backgroundColor: AppColors.card,
-                        side: BorderSide.none,
-                        labelStyle: const TextStyle(fontSize: 12),
-                      ))
+                  .map(
+                    (h) => Chip(
+                      label: Text(h),
+                      backgroundColor: AppColors.card,
+                      side: BorderSide.none,
+                      labelStyle: const TextStyle(fontSize: 12),
+                    ),
+                  )
                   .toList(),
             ),
           ],
 
           // Services
           const SizedBox(height: AppSpacing.l),
-          const Text('Services & prices',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text(
+            'Services & prices',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: AppSpacing.s),
           for (final entry in categories.entries) ...[
             Padding(
               padding: const EdgeInsets.only(top: AppSpacing.s),
-              child: Text(entry.key.toUpperCase(),
-                  style: const TextStyle(
-                      color: AppColors.gold,
-                      fontSize: 12,
-                      letterSpacing: 1,
-                      fontWeight: FontWeight.w700)),
+              child: Text(
+                entry.key.toUpperCase(),
+                style: const TextStyle(
+                  color: AppColors.gold,
+                  fontSize: 12,
+                  letterSpacing: 1,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
             const SizedBox(height: 4),
             Card(
@@ -1086,12 +1261,20 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                       checkColor: Colors.black,
                       controlAffinity: ListTileControlAffinity.leading,
                       title: Text(entry.value[i].name),
-                      subtitle: Text('${entry.value[i].minutes} min',
-                          style: const TextStyle(
-                              color: AppColors.textSecondary, fontSize: 12)),
-                      secondary: Text('₹${entry.value[i].price}',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 15)),
+                      subtitle: Text(
+                        '${entry.value[i].minutes} min',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                      secondary: Text(
+                        '₹${entry.value[i].price}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
+                      ),
                       onChanged: (v) => setState(() {
                         if (v == true) {
                           _selected.add(entry.value[i]);
@@ -1110,8 +1293,10 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
 
           // Slots
           const SizedBox(height: AppSpacing.l),
-          const Text("Today's available slots",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text(
+            "Today's available slots",
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: AppSpacing.s),
           if (slots.isEmpty)
             Text(
@@ -1138,8 +1323,7 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                     color: sl.taken
                         ? AppColors.textSecondary
                         : (selected ? Colors.black : AppColors.textPrimary),
-                    decoration:
-                        sl.taken ? TextDecoration.lineThrough : null,
+                    decoration: sl.taken ? TextDecoration.lineThrough : null,
                     fontWeight: FontWeight.w600,
                   ),
                   onSelected: sl.taken
@@ -1149,8 +1333,10 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
               }).toList(),
             ),
           const SizedBox(height: AppSpacing.s),
-          const Text('Struck-through slots are already booked.',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          const Text(
+            'Struck-through slots are already booked.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+          ),
           const SizedBox(height: AppSpacing.l),
         ],
       ),
@@ -1160,14 +1346,21 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
   Widget _stat(String value, String label) {
     return Column(
       children: [
-        Text(value,
-            style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-                color: AppColors.gold)),
-        Text(label,
-            style:
-                const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: AppColors.gold,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 11.5,
+          ),
+        ),
       ],
     );
   }

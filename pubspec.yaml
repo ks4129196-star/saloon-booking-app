@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   geolocator: ^14.1.1
   url_launcher: ^6.3.3
+  supabase_flutter: ^2.18.3
+  google_sign_in: ^6.2.2
 
 dev_dependencies:
   flutter_test:
