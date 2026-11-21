@@ -12,10 +12,9 @@ const _gold = Color(0xFFD4AF37);
 const _muted = Color(0xFF9A9AA2);
 const _line = Color(0xFF34343A);
 
+/// Local/offline sign-up and login demo.
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.destinationBuilder});
-
-  final Widget Function() destinationBuilder;
+  const AuthScreen({super.key});
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -37,7 +36,14 @@ class _AuthScreenState extends State<AuthScreen> {
   Timer? _resendTimer;
   String _pendingEmail = '';
 
+  /// Log in with an emailed code (default) or with the password.
+  bool _useCodeLogin = true;
+
+  /// Whether the code being entered is a login code (else a sign-up code).
+  bool _codeIsForLogin = false;
+
   bool get _isRegistering => _mode == _AuthMode.register;
+  bool get _loginWithCode => !_isRegistering && _useCodeLogin;
 
   @override
   void dispose() {
@@ -60,13 +66,22 @@ class _AuthScreenState extends State<AuthScreen> {
         setState(() {
           _pendingEmail = email;
           _awaitingCode = true;
+          _codeIsForLogin = false;
         });
         _startResendCooldown();
         _showMessage('A verification code was sent to $email.');
+      } else if (_loginWithCode) {
+        await _api.sendLoginCode(email);
+        if (!mounted) return;
+        setState(() {
+          _pendingEmail = email;
+          _awaitingCode = true;
+          _codeIsForLogin = true;
+        });
+        _startResendCooldown();
+        _showMessage('A login code was sent to $email.');
       } else {
         await _api.login(email, _passwordController.text);
-        if (!mounted) return;
-        _openDestination();
       }
     } on AuthApiException catch (error) {
       if (mounted) _showMessage(error.message);
@@ -82,12 +97,12 @@ class _AuthScreenState extends State<AuthScreen> {
     }
     setState(() => _busy = true);
     try {
-      await _api.verifyCode(
-        _pendingEmail,
-        _codeController.text.trim(),
-      );
-      if (!mounted) return;
-      _openDestination();
+      final code = _codeController.text.trim();
+      if (_codeIsForLogin) {
+        await _api.verifyLoginCode(_pendingEmail, code);
+      } else {
+        await _api.verifyCode(_pendingEmail, code);
+      }
     } on AuthApiException catch (error) {
       if (mounted) _showMessage(error.message);
     } finally {
@@ -95,21 +110,19 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  void _openDestination() {
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(builder: (_) => widget.destinationBuilder()),
-      (_) => false,
-    );
-  }
-
   Future<void> _resendCode() async {
     if (_resendSeconds > 0 || _busy) return;
     setState(() => _busy = true);
     try {
-      await _api.resendCode(_pendingEmail);
+      if (_codeIsForLogin) {
+        await _api.sendLoginCode(_pendingEmail);
+      } else {
+        await _api.resendCode(_pendingEmail);
+      }
       if (mounted) {
+        _codeController.clear();
         _startResendCooldown();
-        _showMessage('A new code has been sent if the account exists.');
+        _showMessage('A new code has been sent to $_pendingEmail.');
       }
     } on AuthApiException catch (error) {
       if (mounted) _showMessage(error.message);
@@ -147,6 +160,7 @@ class _AuthScreenState extends State<AuthScreen> {
     _resendTimer = null;
     setState(() {
       _mode = mode;
+      _useCodeLogin = true;
       _awaitingCode = false;
       _resendSeconds = 0;
       _codeController.clear();
@@ -333,7 +347,12 @@ class _AuthScreenState extends State<AuthScreen> {
           TextFormField(
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
-            textInputAction: TextInputAction.next,
+            textInputAction: _loginWithCode
+                ? TextInputAction.send
+                : TextInputAction.next,
+            onFieldSubmitted: (_) {
+              if (_loginWithCode) _submitCredentials();
+            },
             autofillHints: const [AutofillHints.email],
             decoration: _inputDecoration(
               hint: 'you@example.com',
@@ -346,47 +365,49 @@ class _AuthScreenState extends State<AuthScreen> {
                   : 'Enter a valid email address.';
             },
           ),
-          const SizedBox(height: 19),
-          _label('PASSWORD'),
-          const SizedBox(height: 8),
-          TextFormField(
-            controller: _passwordController,
-            obscureText: _obscurePassword,
-            textInputAction: _isRegistering
-                ? TextInputAction.next
-                : TextInputAction.done,
-            autofillHints: [
-              _isRegistering
-                  ? AutofillHints.newPassword
-                  : AutofillHints.password,
-            ],
-            onFieldSubmitted: (_) {
-              if (!_isRegistering) _submitCredentials();
-            },
-            decoration: _inputDecoration(
-              hint: 'At least 8 characters',
-              icon: Icons.lock_outline_rounded,
-              suffix: IconButton(
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
-                icon: Icon(
-                  _obscurePassword
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                  color: _muted,
-                  size: 20,
+          if (!_loginWithCode) ...[
+            const SizedBox(height: 19),
+            _label('PASSWORD'),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _passwordController,
+              obscureText: _obscurePassword,
+              textInputAction: _isRegistering
+                  ? TextInputAction.next
+                  : TextInputAction.done,
+              autofillHints: [
+                _isRegistering
+                    ? AutofillHints.newPassword
+                    : AutofillHints.password,
+              ],
+              onFieldSubmitted: (_) {
+                if (!_isRegistering) _submitCredentials();
+              },
+              decoration: _inputDecoration(
+                hint: 'At least 8 characters',
+                icon: Icons.lock_outline_rounded,
+                suffix: IconButton(
+                  onPressed: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
+                  icon: Icon(
+                    _obscurePassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    color: _muted,
+                    size: 20,
+                  ),
                 ),
               ),
+              validator: (value) {
+                final password = value ?? '';
+                if (_isRegistering && password.length < 8) {
+                  return 'Use at least 8 characters.';
+                }
+                if (password.isEmpty) return 'Enter your password.';
+                return null;
+              },
             ),
-            validator: (value) {
-              final password = value ?? '';
-              if (_isRegistering && password.length < 8) {
-                return 'Use at least 8 characters.';
-              }
-              if (password.isEmpty) return 'Enter your password.';
-              return null;
-            },
-          ),
+          ],
           if (_isRegistering) ...[
             const SizedBox(height: 19),
             _label('CONFIRM PASSWORD'),
@@ -407,17 +428,41 @@ class _AuthScreenState extends State<AuthScreen> {
           ],
           const SizedBox(height: 26),
           _primaryButton(
-            label: _isRegistering ? 'Create account' : 'Continue',
+            label: _isRegistering
+                ? 'Create account'
+                : _loginWithCode
+                ? 'Send code'
+                : 'Continue',
             onPressed: _submitCredentials,
           ),
           const SizedBox(height: 14),
           Text(
             _isRegistering
                 ? 'We’ll email you a one-time code to verify your account.'
+                : _loginWithCode
+                ? 'We’ll email you a 6-digit code. No password needed.'
                 : 'Sign in securely with your email and password.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: _muted, fontSize: 12, height: 1.5),
+            style: const TextStyle(color: _muted, fontSize: 12, height: 1.5),
           ),
+          if (!_isRegistering)
+            TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => setState(() {
+                      _useCodeLogin = !_useCodeLogin;
+                      _passwordController.clear();
+                    }),
+              child: Text(
+                _useCodeLogin
+                    ? 'Use password instead'
+                    : 'Email me a code instead',
+                style: const TextStyle(
+                  color: _gold,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -447,7 +492,10 @@ class _AuthScreenState extends State<AuthScreen> {
           ).copyWith(counterText: ''),
         ),
         const SizedBox(height: 20),
-        _primaryButton(label: 'Verify email', onPressed: _verifyCode),
+        _primaryButton(
+          label: _codeIsForLogin ? 'Log in' : 'Verify email',
+          onPressed: _verifyCode,
+        ),
         const SizedBox(height: 12),
         TextButton(
           onPressed: _busy || _resendSeconds > 0 ? null : _resendCode,

@@ -1,59 +1,54 @@
-# Salone — Salon Finder
+# Salone - Salon Finder
 
-A Flutter salon finder with email/password registration and login. Supabase
-Auth sends a signup verification code, and the app opens the salon finder
-after signup verification or a successful password login.
+A Flutter app for finding nearby salons and booking a slot, with its own
+Node.js server in [`backend/`](backend/).
 
-## Configure Supabase
+| Part | Technology |
+| --- | --- |
+| App | Flutter (Android, iOS, web, Windows, macOS) |
+| Server | Node.js + Express + TypeScript |
+| Database | PostgreSQL with Prisma |
+| Sign-in | Email + password (bcrypt) or a 6-digit emailed code; JWT access tokens with rotating refresh tokens |
+| Permissions | Roles: customer, salon owner, admin (checked by the server on every request) |
+| Live updates | Socket.IO: queue sizes, booked slots and bookings update without refreshing |
+| Payments | Razorpay (UPI / cards), optional; customers can always pay at the salon |
+| Assistant | Claude, called from the server so the API key never ships in the app |
 
-1. Create a Supabase project.
-2. In **Project Settings → API**, copy the **Project URL** and the
-   **anon/publishable key**.
-3. In **Authentication → Providers → Email**, enable email signup and turn on
-   **Confirm email**. The app depends on this setting to keep signup locked
-   until the OTP is verified.
-4. In **Authentication → Emails → Confirm signup**, replace the default
-   confirmation-link template with a code template. This app verifies the
-   six-digit OTP; it does not handle confirmation links.
+## Run it on your computer
 
-   ```html
-   <h2>Confirm your signup</h2>
-   <p>Your verification code is: {{ .Token }}</p>
+1. Start the server: follow [backend/README.md](backend/README.md). It runs on
+   `http://localhost:4000`.
+2. Run the app:
+
+   ```powershell
+   flutter pub get
+   flutter run -d windows
    ```
 
-   Use `{{ .Token }}` rather than `{{ .ConfirmationURL }}`. Make sure this
-   template is configured in the same Supabase project whose URL and key you
-   pass to the app.
+   The app talks to `http://localhost:4000` by default. To use another server:
 
-5. Supabase's built-in email sender is intended for testing and has low
-   sending limits. Configure a custom SMTP provider in Supabase for sustained
-   testing or production.
+   ```powershell
+   flutter run --dart-define=API_URL=https://api.yourdomain.com
+   ```
 
-The app includes the project's URL and anon/publishable key as defaults; pass
-`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` at run time to override them.
-Do not use a Supabase `service_role` key in the Flutter app.
+   On the Android emulator, your computer is `10.0.2.2`:
+   `--dart-define=API_URL=http://10.0.2.2:4000`.
 
-## Run the app
+Run the app's tests with `flutter test`, and the server's with `npm test` in
+`backend/`.
 
-From the repository root, you can run with the default project:
+## How it fits together
 
-```powershell
-flutter pub get
-flutter run -d windows
-```
-
-To use another project, add `--dart-define=SUPABASE_URL=https://your-project-id.supabase.co --dart-define=SUPABASE_PUBLISHABLE_KEY=your-anon-or-publishable-key`.
-For another target, replace `-d windows` with the target you use.
-
-## Authentication flow
-
-- **Register:** `signUp` creates the Supabase user and triggers the Confirm
-  signup email OTP.
-- **Login:** `signInWithPassword` checks the credentials and the app opens the
-  salon finder using the authenticated session. Login does not send a magic
-  link or OTP email.
-- **Verify:** signup codes use `OtpType.signup`; Supabase stores the resulting
-  session after successful verification.
-- **Resend:** signup uses Supabase `resend`.
-
-Run Flutter tests with `flutter test` from the repository root.
+- **Sign-up:** the server emails a 6-digit code; the account works once the
+  code is entered. **Log in** with an emailed code (default) or a password.
+  The app stays signed in between launches (the refresh token is kept in the
+  device's secure storage).
+- **Roles:** every account starts as a customer. Owners create and manage
+  their own salons (details, services, live queue, bookings). Admins manage
+  everything and assign roles under **Users & roles**.
+- **Booking:** the server works out the price, checks opening hours and
+  makes sure a slot is booked only once.
+- **Paying online** (Android and iOS): the slot is held for 15 minutes while
+  the customer pays in Razorpay Checkout; the server checks Razorpay's
+  signature before confirming.
+- The old `supabase/` setup is no longer used.

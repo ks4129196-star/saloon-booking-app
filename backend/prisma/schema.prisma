@@ -1,0 +1,164 @@
+// Salon Finder database.
+//
+// Ported from supabase/migrations. Permissions that Supabase enforced with
+// Row Level Security are now enforced by the API (src/auth/rbac.ts and the
+// route handlers); the database keeps the data checks (CHECK constraints,
+// added as raw SQL in the first migration) and one booking per slot
+// (Booking.activeSlot).
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  customer
+  owner
+  admin
+}
+
+enum CodePurpose {
+  signup
+  login
+}
+
+enum BookingStatus {
+  pending_payment // slot held while the customer pays online
+  confirmed
+  cancelled
+  expired // online payment was not completed in time
+}
+
+enum PaymentMethod {
+  salon // pay at the salon
+  online // Razorpay
+}
+
+enum PaymentStatus {
+  unpaid
+  paid
+  refund_due // paid online, then cancelled; refund from the Razorpay dashboard
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  fullName      String?  @map("full_name")
+  role          Role     @default(customer)
+  emailVerified Boolean  @default(false) @map("email_verified")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  ownedSalons   Salon[]
+  bookings      Booking[]
+  emailCodes    EmailCode[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model EmailCode {
+  id         String      @id @default(uuid()) @db.Uuid
+  userId     String      @map("user_id") @db.Uuid
+  purpose    CodePurpose
+  codeHash   String      @map("code_hash")
+  expiresAt  DateTime    @map("expires_at") @db.Timestamptz
+  attempts   Int         @default(0)
+  consumedAt DateTime?   @map("consumed_at") @db.Timestamptz
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("email_codes")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Salon {
+  id         Int      @id @default(autoincrement())
+  ownerId    String?  @map("owner_id") @db.Uuid
+  name       String
+  type       String   @default("Salon")
+  address    String   @default("")
+  phone      String   @default("")
+  rating     Decimal  @default(0) @db.Decimal(2, 1)
+  reviews    Int      @default(0)
+  lat        Float
+  lon        Float
+  timezone   String   @default("Asia/Kolkata")
+  openMin    Int      @map("open_min")
+  closeMin   Int      @map("close_min")
+  staff      Int      @default(1)
+  queue      Int      @default(0)
+  highlights String[] @default([])
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  owner    User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  services Service[]
+  bookings Booking[]
+
+  @@index([ownerId])
+  @@map("salons")
+}
+
+model Service {
+  id       Int    @id @default(autoincrement())
+  salonId  Int    @map("salon_id")
+  name     String
+  price    Int // INR
+  minutes  Int
+  category String @default("Other")
+
+  salon Salon @relation(fields: [salonId], references: [id], onDelete: Cascade)
+
+  @@index([salonId])
+  @@map("services")
+}
+
+model Booking {
+  id                String        @id @default(uuid()) @db.Uuid
+  salonId           Int           @map("salon_id")
+  customerId        String        @map("customer_id") @db.Uuid
+  customerEmail     String        @default("") @map("customer_email")
+  slotStart         DateTime      @map("slot_start") @db.Timestamptz
+  // Equals slotStart while the booking holds its slot (confirmed or awaiting
+  // payment) and is null once cancelled or expired. Unique per salon, so a
+  // slot can hold only one booking.
+  activeSlot        DateTime?     @map("active_slot") @db.Timestamptz
+  services          Json          @default("[]")
+  total             Int
+  minutes           Int
+  status            BookingStatus @default(confirmed)
+  paymentMethod     PaymentMethod @default(salon) @map("payment_method")
+  paymentStatus     PaymentStatus @default(unpaid) @map("payment_status")
+  razorpayOrderId   String?       @unique @map("razorpay_order_id")
+  razorpayPaymentId String?       @map("razorpay_payment_id")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz
+
+  salon    Salon @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  customer User  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([salonId, activeSlot])
+  @@index([salonId, slotStart])
+  @@index([customerId])
+  @@map("bookings")
+}
