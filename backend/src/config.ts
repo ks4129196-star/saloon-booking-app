@@ -24,6 +24,14 @@ const schema = z.object({
   RAZORPAY_KEY_SECRET: optional,
   RAZORPAY_WEBHOOK_SECRET: optional,
 
+  // Pilot only: in production without SMTP, print sign-up and login codes in
+  // the server log (which only the owner can read) instead of refusing to
+  // start. Real customers can't sign up this way; set up SMTP before launch.
+  LOGIN_CODES_IN_LOG: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim().toLowerCase() === 'true'),
+
   ANTHROPIC_API_KEY: optional,
   ANTHROPIC_MODEL: z.string().default('claude-opus-5-5'),
 });
@@ -38,8 +46,14 @@ if (!parsed.success) {
 
 const env = parsed.data;
 
+if (env.NODE_ENV === 'production' && !env.SMTP_HOST && !env.LOGIN_CODES_IN_LOG) {
+  throw new Error(
+    'SMTP_HOST must be set in production so codes can be emailed. ' +
+      '(For a private test deployment only, LOGIN_CODES_IN_LOG=true prints them in the server log instead.)',
+  );
+}
 if (env.NODE_ENV === 'production' && !env.SMTP_HOST) {
-  throw new Error('SMTP_HOST must be set in production so codes can be emailed.');
+  console.warn('WARNING: SMTP is not set. Login codes are printed in this log; customers cannot sign up themselves.');
 }
 
 export const config = {

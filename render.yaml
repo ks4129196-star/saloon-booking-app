@@ -1,0 +1,27 @@
+# Render Blueprint: the Salon Finder API on Render's free plan.
+# Render → New → Blueprint → pick this repository. It asks for DATABASE_URL
+# (from Neon, free) and creates the rest. See backend/DEPLOY.md.
+services:
+  - type: web
+    name: salon-finder-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore # closest to India
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # paste the Neon connection string when asked
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CODE_SECRET
+        generateValue: true
+      # Pilot: login codes appear in Render's Logs tab until email is set up.
+      # Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD and MAIL_FROM, then
+      # delete this line before real customers sign up.
+      - key: LOGIN_CODES_IN_LOG
+        value: "true"

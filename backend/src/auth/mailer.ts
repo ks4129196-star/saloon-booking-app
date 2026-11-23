@@ -38,7 +38,7 @@ class SmtpMailer implements Mailer {
   }
 }
 
-/** Development only: prints codes to the server log instead of emailing. */
+/** Without SMTP (development, or a pilot with LOGIN_CODES_IN_LOG): prints codes to the server log. */
 class ConsoleMailer implements Mailer {
   async sendCode(to: string, code: string, purpose: CodePurpose) {
     console.log(`[dev mail] ${purpose} code for ${to}: ${code}`);

@@ -109,19 +109,8 @@ assistant screen shows "The assistant is not set up yet."
 
 ## 5. Put it online
 
-Any Node.js host works. With **Render** or **Railway**:
-
-1. Push this repository to GitHub and create a new web service from it, with
-   root directory `backend`.
-2. Build command: `npm install && npm run build && npm run db:deploy`
-3. Start command: `npm start`
-4. Add every variable from `.env` in the host's settings, with
-   `NODE_ENV=production`. (In production the server refuses to start without
-   `SMTP_HOST`.)
-5. Add a custom domain `api.yourdomain.com` in the host's settings. It shows a
-   CNAME target; in GoDaddy DNS add a **CNAME** record with **Name** `api` and
-   that target as **Value**. The host then issues the HTTPS certificate.
-6. Build the app with `--dart-define=API_URL=https://api.yourdomain.com`.
+Step-by-step free hosting (Render + Neon): see [DEPLOY.md](DEPLOY.md). The
+`Dockerfile` here also works on Railway, Fly.io and Koyeb.
 
 The server needs a host that keeps it running (not serverless functions),
 because Socket.IO keeps connections open and a timer releases unpaid slot
@@ -147,7 +136,13 @@ All routes except `/auth/*`, `/health` and the Razorpay webhook need
 | `GET /salons` · `GET /salons/:id` | signed in | Browse salons with services |
 | `GET /salons/managed` | owner, admin | Salons you manage |
 | `POST /salons` · `PATCH /salons/:id` · `DELETE /salons/:id` | owner (own), admin | Manage salons |
-| `PATCH /salons/:id/queue` | owner (own), admin | Live queue size |
+| `GET /salons/:id/availability` | anyone | Free start times and chairs for a day |
+| `GET /salons/:id/queue` | anyone | Walk-in queue: numbers and estimates, no names |
+| `POST /salons/:id/queue` | signed in | Take a queue token |
+| `POST /salons/:id/queue/walk-in` · `GET /salons/:id/queue/manage` | owner (own), admin | Add a walk-in; today's tokens with names |
+| `GET /queue/mine` | signed in | Your active token |
+| `POST /queue/:id/{call,start,done,no_show,cancel}` | owner (own), admin; cancel also the token's customer | Serve the queue |
+| `POST /salons/:id/chairs` · `PATCH /chairs/:id` · `DELETE /chairs/:id` | owner (own), admin | Chairs and their live status |
 | `POST /salons/:id/services` · `PATCH /services/:id` · `DELETE /services/:id` | owner (own), admin | Manage services |
 | `GET /bookings/taken-slots` | signed in | Booked times only |
 | `POST /bookings` | signed in | Book (`payment_method`: `salon` or `online`) |
