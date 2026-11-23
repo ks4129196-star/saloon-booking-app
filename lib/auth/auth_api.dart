@@ -1,5 +1,4 @@
-import 'package:flutter/foundation.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../core/api_client.dart';
 
 class AuthApiException implements Exception {
   const AuthApiException(this.message);
@@ -10,85 +9,60 @@ class AuthApiException implements Exception {
   String toString() => message;
 }
 
+/// Sign-up and login against the Salon Finder API. Codes are emailed by the
+/// server; a successful sign-in is stored in [ApiClient].
 class AuthApi {
-  GoTrueClient get _auth => Supabase.instance.client.auth;
+  ApiClient get _api => ApiClient.instance;
 
-  Future<void> register(String email, String password) async {
-    try {
-      final response = await _auth.signUp(email: email, password: password);
-      if (response.session != null) {
-        await _auth.signOut();
-        throw const AuthApiException(
-          'Email confirmation is disabled in Supabase. Enable it in '
-          'Authentication settings to require the verification code.',
-        );
-      }
-    } on AuthApiException {
-      rethrow;
-    } on AuthException catch (error) {
-      throw AuthApiException(error.message);
-    } catch (error) {
-      _logUnexpectedError(error);
-      throw const AuthApiException(
-        'Could not reach Supabase. Check your connection and try again.',
+  /// Creates the account and emails a 6-digit verification code.
+  Future<void> register(String email, String password) =>
+      _call(() => _api.postPublic('/auth/register', {
+            'email': email,
+            'password': password,
+          }));
+
+  Future<void> login(String email, String password) => _signIn(
+        () => _api.postPublic('/auth/login', {
+          'email': email,
+          'password': password,
+        }),
       );
-    }
+
+  /// Emails a 6-digit login code. Never creates an account.
+  Future<void> sendLoginCode(String email) =>
+      _call(() => _api.postPublic('/auth/login/code', {'email': email}));
+
+  Future<void> verifyLoginCode(String email, String code) => _signIn(
+        () => _api.postPublic('/auth/login/code/verify', {
+          'email': email,
+          'code': code,
+        }),
+      );
+
+  /// Sends a new sign-up code.
+  Future<void> resendCode(String email) =>
+      _call(() => _api.postPublic('/auth/register/resend', {'email': email}));
+
+  /// Checks the sign-up code and signs the user in.
+  Future<void> verifyCode(String email, String code) => _signIn(
+        () => _api.postPublic('/auth/register/verify', {
+          'email': email,
+          'code': code,
+        }),
+      );
+
+  Future<void> signOut() => _api.endSession();
+
+  Future<void> _signIn(Future<Object?> Function() request) async {
+    final body = await _call(request);
+    await _api.startSession(body as Map<String, dynamic>);
   }
 
-  Future<void> login(String email, String password) async {
+  Future<Object?> _call(Future<Object?> Function() request) async {
     try {
-      await _auth.signInWithPassword(email: email, password: password);
-    } on AuthException catch (error) {
+      return await request();
+    } on ApiException catch (error) {
       throw AuthApiException(error.message);
-    } catch (error) {
-      _logUnexpectedError(error);
-      throw const AuthApiException(
-        'Could not reach Supabase. Check your connection and try again.',
-      );
     }
-  }
-
-  Future<void> resendCode(String email) async {
-    try {
-      await _auth.resend(type: OtpType.signup, email: email);
-    } on AuthException catch (error) {
-      throw AuthApiException(error.message);
-    } catch (error) {
-      _logUnexpectedError(error);
-      throw const AuthApiException(
-        'Could not resend the code. Check your connection and try again.',
-      );
-    }
-  }
-
-  Future<void> verifyCode(
-    String email,
-    String code,
-  ) async {
-    try {
-      final response = await _auth.verifyOTP(
-        type: OtpType.signup,
-        email: email,
-        token: code,
-      );
-      if (response.session == null) {
-        throw const AuthApiException(
-          'Email verification did not create a session. Please try again.',
-        );
-      }
-    } on AuthApiException {
-      rethrow;
-    } on AuthException catch (error) {
-      throw AuthApiException(error.message);
-    } catch (error) {
-      _logUnexpectedError(error);
-      throw const AuthApiException(
-        'Could not verify the code. Check your connection and try again.',
-      );
-    }
-  }
-
-  void _logUnexpectedError(Object error) {
-    if (kDebugMode) debugPrint('Supabase authentication failed: $error');
   }
 }
