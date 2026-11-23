@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Router } from 'express';
-import { rateLimit } from 'express-rate-limit';
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 
 import { currentUser, requireAuth } from '../auth/rbac.js';
@@ -33,7 +33,9 @@ let client: Anthropic | undefined;
 const chatLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 10,
-  keyGenerator: (req) => req.user?.id ?? req.ip ?? 'unknown',
+  // Per signed-in user; the IP fallback groups IPv6 addresses by /56 subnet so
+  // one client cannot dodge the limit by rotating addresses.
+  keyGenerator: (req) => (req.user ? `user:${req.user.id}` : ipKeyGenerator(req.ip ?? '')),
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   skip: () => config.env === 'test',

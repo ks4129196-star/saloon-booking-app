@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../core/api_client.dart';
 import '../core/realtime.dart';
 import '../core/theme.dart';
@@ -8,11 +9,20 @@ import '../salons/home_screen.dart';
 import 'auth_api.dart';
 import 'auth_screen.dart';
 
-/// Root of the signed-in experience.
+/// Shown while nobody is signed in: anyone can browse salons and chairs.
+const guestProfile = Profile(
+  id: 'guest',
+  email: 'Guest',
+  role: AppRole.customer,
+);
+
+/// Root of the app.
 ///
-/// The session is saved on the device, so a returning user goes straight to
-/// the salon list. Signing in or out is picked up from [ApiClient.userId],
-/// and the user's profile (with their role) is loaded from the API.
+/// Signed out, it shows the salon list as a guest; booking or managing a
+/// salon asks the user to sign in ([showSignIn]). The session is saved on
+/// the device, so a returning user is signed in straight away. Signing in or
+/// out is picked up from [ApiClient.userId], and the user's profile (with
+/// their role) is loaded from the API.
 class SessionGate extends StatefulWidget {
   const SessionGate({super.key});
 
@@ -50,6 +60,10 @@ class _SessionGateState extends State<SessionGate> {
     if (!mounted || _restoring) return;
     final userId = _session.value;
     if (userId == _userId) return;
+    // Just signed in from the sign-in screen: close it and show the app.
+    if (userId != null) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
     setState(() {
       _userId = userId;
       _profile = null;
@@ -79,7 +93,13 @@ class _SessionGateState extends State<SessionGate> {
         body: Center(child: CircularProgressIndicator(color: AppColors.gold)),
       );
     }
-    if (_userId == null) return const AuthScreen();
+    if (_userId == null) {
+      return HomeScreen(
+        key: const ValueKey('guest'),
+        profile: guestProfile,
+        onReloadProfile: () async {},
+      );
+    }
 
     final profile = _profile;
     if (profile != null && profile.id == _userId) {
@@ -127,8 +147,33 @@ class _SessionGateState extends State<SessionGate> {
   }
 }
 
+/// Opens sign-up / login over the current screen. [SessionGate] closes it
+/// once the user is signed in.
+Future<void> showSignIn(BuildContext context) => Navigator.of(context).push(
+  MaterialPageRoute<void>(
+    fullscreenDialog: true,
+    builder: (_) => Stack(
+      children: [
+        const AuthScreen(),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: Builder(
+              builder: (context) => IconButton(
+                tooltip: 'Close',
+                icon: const Icon(Icons.close_rounded, color: Colors.white),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  ),
+);
+
 /// Asks for confirmation, closes any open screens and signs out. The
-/// [SessionGate] then shows the login screen.
+/// [SessionGate] then shows the salon list as a guest.
 Future<void> signOut(BuildContext context, {bool confirm = false}) async {
   if (confirm) {
     final ok = await showDialog<bool>(

@@ -16,13 +16,35 @@ const newSalon = {
 };
 
 describe('salons and roles', () => {
-  it('everyone signed in can browse; nobody signed out can', async () => {
+  it('anyone can browse salons, signed in or not', async () => {
     const customer = await signUp('c@example.com');
-    await createSalon();
-    await request(app).get('/salons').expect(401);
+    const salon = await createSalon();
+    const guest = await request(app).get('/salons').expect(200);
+    expect(guest.body).toHaveLength(1);
+    await request(app).get(`/salons/${salon.id}`).expect(200);
+    const from = new Date();
+    const to = new Date(from.getTime() + 86_400_000);
+    await request(app)
+      .get('/bookings/taken-slots')
+      .query({ from: from.toISOString(), to: to.toISOString() })
+      .expect(200);
     const res = await request(app).get('/salons').set(auth(customer)).expect(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].services.map((s: { name: string }) => s.name)).toEqual(['Haircut', 'Shave']);
+  });
+
+  it('signed-out visitors cannot book or change anything', async () => {
+    const salon = await createSalon();
+    await request(app).post('/bookings').send({}).expect(401);
+    await request(app).get('/bookings/mine').expect(401);
+    await request(app).get('/salons/managed').expect(401);
+    await request(app).post('/salons').send(newSalon).expect(401);
+    await request(app).post(`/salons/${salon.id}/queue`).send({}).expect(401);
+    await request(app).post(`/salons/${salon.id}/queue/walk-in`).send({ customer_name: 'A' }).expect(401);
+    await request(app).get(`/salons/${salon.id}/queue/manage`).expect(401);
+    await request(app).get('/queue/mine').expect(401);
+    await request(app).delete(`/salons/${salon.id}`).expect(401);
+    await request(app).get(`/salons/${salon.id}/bookings`).expect(401);
   });
 
   it('customers cannot create salons', async () => {
@@ -56,7 +78,8 @@ describe('salons and roles', () => {
     expect(res.body).toMatchObject({ name: 'Renamed', rating: 0, reviews: 0, owner_id: owner.id });
 
     await request(app).patch(`/salons/${theirs.id}`).set(auth(owner)).send(newSalon).expect(403);
-    await request(app).patch(`/salons/${theirs.id}/queue`).set(auth(owner)).send({ queue: 3 }).expect(403);
+    await request(app).post(`/salons/${theirs.id}/queue/walk-in`).set(auth(owner)).send({ customer_name: 'A' }).expect(403);
+    await request(app).get(`/salons/${theirs.id}/queue/manage`).set(auth(owner)).expect(403);
     await request(app).delete(`/salons/${theirs.id}`).set(auth(owner)).expect(403);
     await request(app)
       .post(`/salons/${theirs.id}/services`)
@@ -69,8 +92,12 @@ describe('salons and roles', () => {
   it('owners manage the live queue and services of their salon', async () => {
     const owner = await signUp('o@example.com', Role.owner);
     const salon = await createSalon(owner);
-    const queue = await request(app).patch(`/salons/${salon.id}/queue`).set(auth(owner)).send({ queue: 4 }).expect(200);
-    expect(queue.body.queue).toBe(4);
+    for (const name of ['A', 'B', 'C', 'D']) {
+      await request(app).post(`/salons/${salon.id}/queue/walk-in`).set(auth(owner)).send({ customer_name: name }).expect(201);
+    }
+    // The queue length is counted from the tokens; nobody types it in.
+    const res = await request(app).get(`/salons/${salon.id}`).expect(200);
+    expect(res.body.queue).toBe(4);
 
     const service = await request(app)
       .post(`/salons/${salon.id}/services`)

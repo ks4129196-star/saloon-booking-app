@@ -213,7 +213,10 @@ class BookingTile extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.s),
               Text(
-                b.services.map((e) => e.name).join(', '),
+                [
+                  b.services.map((e) => e.name).join(', '),
+                  ?b.chairName,
+                ].join(' • '),
                 style: const TextStyle(color: AppColors.textSecondary),
               ),
               const SizedBox(height: 4),

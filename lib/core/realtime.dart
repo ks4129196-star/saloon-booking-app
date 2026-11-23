@@ -7,8 +7,9 @@ import 'api_client.dart';
 
 /// One live update from the server.
 ///
-/// [type] is one of `salon:changed`, `salon:deleted`, `slots:changed` or
-/// `booking:changed`; [data] is the JSON payload.
+/// [type] is one of `salon:changed`, `salon:deleted`, `slots:changed`,
+/// `booking:changed`, `queue:changed` or `token:changed`; [data] is the JSON
+/// payload.
 class RealtimeEvent {
   const RealtimeEvent(this.type, this.data);
 
@@ -17,12 +18,17 @@ class RealtimeEvent {
 
   /// The salon this event is about.
   int? get salonId {
-    final id = data['salon_id'] ?? (type.startsWith('salon:') ? data['id'] : null);
+    final id =
+        data['salon_id'] ?? (type.startsWith('salon:') ? data['id'] : null);
     return id is num ? id.toInt() : null;
   }
 }
 
-/// Live queue, slot and booking updates over Socket.IO while signed in.
+/// Live queue, chair, slot and booking updates over Socket.IO.
+///
+/// Guests get salon, chair and slot changes; signed-in users also get their
+/// bookings. The connection is remade when the user signs in or out so the
+/// server puts it in the right rooms.
 class Realtime {
   Realtime._() {
     ApiClient.instance.userId.addListener(_sessionChanged);
@@ -36,6 +42,8 @@ class Realtime {
     'salon:deleted',
     'slots:changed',
     'booking:changed',
+    'queue:changed', // a salon's walk-in queue moved
+    'token:changed', // the signed-in customer's own token
   ];
 
   final _events = StreamController<RealtimeEvent>.broadcast();
@@ -55,15 +63,21 @@ class Realtime {
     _socket?.emit('salon:unwatch-bookings', salonId);
   }
 
+  /// Widget tests set this to false: there is no server to connect to.
+  @visibleForTesting
+  static bool enabled = true;
+
+  String? _connectedAs;
+
   void _sessionChanged() {
-    final signedIn = ApiClient.instance.userId.value != null;
-    if (signedIn && _socket == null) {
-      _connect();
-    } else if (!signedIn && _socket != null) {
-      _socket!.dispose();
-      _socket = null;
-      _watchedSalons.clear();
-    }
+    if (!enabled) return;
+    final userId = ApiClient.instance.userId.value;
+    if (_socket != null && userId == _connectedAs) return;
+    _socket?.dispose();
+    _socket = null;
+    if (userId == null) _watchedSalons.clear();
+    _connectedAs = userId;
+    _connect();
   }
 
   void _connect() {
@@ -73,9 +87,10 @@ class Realtime {
           .setTransports(['websocket'])
           .enableReconnection()
           // Read the token on every (re)connect: it is refreshed every 15 min.
-          .setAuthFn((callback) => callback({
-                'token': ApiClient.instance.accessToken ?? '',
-              }))
+          .setAuthFn(
+            (callback) =>
+                callback({'token': ApiClient.instance.accessToken ?? ''}),
+          )
           .build(),
     );
     for (final type in _types) {

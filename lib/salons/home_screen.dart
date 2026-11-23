@@ -13,11 +13,14 @@ import '../data/salon_repository.dart';
 import '../models/profile.dart';
 import '../models/salon.dart';
 import '../owner/manage_salons_screen.dart';
+import '../owner/staff_dashboard_screen.dart';
+import '../queue/queue_widgets.dart';
+import 'chair_widgets.dart';
 import 'salon_detail_page.dart';
 
 enum SortBy { nearest, leastWait }
 
-enum _MenuAction { bookings, manageSalons, users, logout }
+enum _MenuAction { signIn, bookings, dashboard, manageSalons, users, logout }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -46,6 +49,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String _locationNote = '';
   double _lat = _fallbackLat, _lon = _fallbackLon;
   List<Salon> _salons = [];
+
+  /// The signed-in customer's walk-in token, shown above the list.
+  QueueToken? _myToken;
   Map<int, Set<DateTime>> _taken = {};
   DateTime _updatedAt = DateTime.now();
 
@@ -140,9 +146,18 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final s in salons) {
         s.distance = Geolocator.distanceBetween(_lat, _lon, s.lat, s.lon);
       }
+      QueueToken? myToken;
+      if (!widget.profile.isGuest) {
+        try {
+          myToken = await _repository.fetchMyToken();
+        } on RepositoryException {
+          myToken = _myToken; // keep showing the last known token
+        }
+      }
       if (!mounted) return;
       setState(() {
         _salons = salons;
+        _myToken = myToken;
         _taken = results[1] as Map<int, Set<DateTime>>;
         _updatedAt = DateTime.now();
         _loadError = null;
@@ -201,8 +216,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onMenu(_MenuAction action) {
     switch (action) {
+      case _MenuAction.signIn:
+        showSignIn(context);
       case _MenuAction.bookings:
         _push(MyBookingsScreen(profile: widget.profile));
+      case _MenuAction.dashboard:
+        openStaffDashboard(context, widget.profile);
       case _MenuAction.manageSalons:
         _push(ManageSalonsScreen(profile: widget.profile));
       case _MenuAction.users:
@@ -266,6 +285,28 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Text(
               _locationNote,
               style: const TextStyle(color: AppColors.warning, fontSize: 12.5),
+            ),
+          ),
+        if (_myToken != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.m,
+              AppSpacing.s,
+              AppSpacing.m,
+              0,
+            ),
+            child: MyTokenCard(
+              token: _myToken!,
+              now: now,
+              showSalon: true,
+              onTap: () {
+                final salon = _salons
+                    .where((s) => s.id == _myToken!.salonId)
+                    .firstOrNull;
+                if (salon != null) {
+                  _push(SalonDetailPage(salon: salon, profile: widget.profile));
+                }
+              },
             ),
           ),
         Padding(
@@ -434,14 +475,35 @@ class _AccountMenu extends StatelessWidget {
           ),
         ),
         const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: _MenuAction.bookings,
-          child: ListTile(
-            leading: Icon(Icons.event_note_rounded),
-            title: Text('My bookings'),
+        if (profile.isGuest)
+          const PopupMenuItem(
+            value: _MenuAction.signIn,
+            child: ListTile(
+              leading: Icon(Icons.login_rounded, color: AppColors.gold),
+              title: Text('Sign in or create account'),
+              subtitle: Text(
+                'To book, see your bookings or manage a salon',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
           ),
-        ),
-        if (profile.canManageSalons)
+        if (!profile.isGuest)
+          const PopupMenuItem(
+            value: _MenuAction.bookings,
+            child: ListTile(
+              leading: Icon(Icons.event_note_rounded),
+              title: Text('My bookings'),
+            ),
+          ),
+        if (!profile.isGuest && profile.canManageSalons)
+          const PopupMenuItem(
+            value: _MenuAction.dashboard,
+            child: ListTile(
+              leading: Icon(Icons.dashboard_rounded, color: AppColors.gold),
+              title: Text('Staff dashboard'),
+            ),
+          ),
+        if (!profile.isGuest && profile.canManageSalons)
           PopupMenuItem(
             value: _MenuAction.manageSalons,
             child: ListTile(
@@ -449,7 +511,7 @@ class _AccountMenu extends StatelessWidget {
               title: Text(profile.isAdmin ? 'Manage salons' : 'My salons'),
             ),
           ),
-        if (profile.isAdmin)
+        if (!profile.isGuest && profile.isAdmin)
           const PopupMenuItem(
             value: _MenuAction.users,
             child: ListTile(
@@ -457,14 +519,16 @@ class _AccountMenu extends StatelessWidget {
               title: Text('Users & roles'),
             ),
           ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: _MenuAction.logout,
-          child: ListTile(
-            leading: Icon(Icons.logout_rounded, color: AppColors.error),
-            title: Text('Log out', style: TextStyle(color: AppColors.error)),
+        if (!profile.isGuest) ...[
+          const PopupMenuDivider(),
+          const PopupMenuItem(
+            value: _MenuAction.logout,
+            child: ListTile(
+              leading: Icon(Icons.logout_rounded, color: AppColors.error),
+              title: Text('Log out', style: TextStyle(color: AppColors.error)),
+            ),
           ),
-        ),
+        ],
       ],
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.s),
@@ -563,6 +627,9 @@ class WaitBadge extends StatelessWidget {
     late final Color color;
     if (wait == null) {
       text = 'Closed';
+      color = AppColors.textSecondary;
+    } else if (salon.allChairsOnBreak) {
+      text = 'On break';
       color = AppColors.textSecondary;
     } else if (wait == 0) {
       text = 'No wait';
@@ -680,6 +747,10 @@ class SalonCard extends StatelessWidget {
                   ],
                 ],
               ),
+              if (open && salon.chairs.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.xs + 2),
+                ChairSummary(salon: salon),
+              ],
               const SizedBox(height: AppSpacing.s),
               Text(
                 salon.address,

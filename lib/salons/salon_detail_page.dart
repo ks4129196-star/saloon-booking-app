@@ -3,16 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../auth/session_gate.dart' show showSignIn;
+import '../bookings/booking_form_screen.dart';
 import '../core/realtime.dart';
 import '../core/theme.dart';
 import '../data/salon_repository.dart';
 import '../models/profile.dart';
 import '../models/salon.dart';
 import '../owner/salon_editor_screen.dart';
-import '../payments/razorpay_checkout.dart';
+import '../owner/staff_dashboard_screen.dart';
+import '../queue/queue_widgets.dart';
+import 'chair_widgets.dart';
 import 'home_screen.dart' show WaitBadge;
-
-enum _PayChoice { atSalon, online }
 
 class SalonDetailPage extends StatefulWidget {
   const SalonDetailPage({
@@ -32,10 +34,6 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
   final _repository = SalonRepository();
   final Set<Service> _selected = {};
   late Salon _salon = widget.salon;
-  Set<DateTime> _taken = {};
-  bool _loadingSlots = true;
-  bool _booking = false;
-  DateTime? _slotStart;
 
   Salon get s => _salon;
 
@@ -47,49 +45,132 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
   int get _minutes => _selected.fold(0, (a, e) => a + e.minutes);
 
   StreamSubscription<RealtimeEvent>? _live;
+  Timer? _queueReload;
+  late final Timer _clock;
+
+  QueueView? _queue;
+  QueueToken? _myToken; // the signed-in customer's token here, if any
+  bool _joining = false;
 
   @override
   void initState() {
     super.initState();
-    _loadSlots();
-    // Another customer booked or the owner changed the salon: refresh.
-    _live = Realtime.instance.events
-        .where((event) => event.salonId == s.id)
-        .listen((event) {
-          if (event.type == 'slots:changed') {
-            _loadSlots();
-          } else if (event.type == 'salon:changed' ||
-              event.type == 'salon:deleted') {
-            _reloadSalon();
-          }
-        });
+    _loadQueue();
+    _live = Realtime.instance.events.listen((event) {
+      if (event.type == 'token:changed') {
+        _scheduleQueueReload();
+        return;
+      }
+      if (event.salonId != s.id) return;
+      if (event.type == 'salon:changed' || event.type == 'salon:deleted') {
+        _reloadSalon();
+      }
+      if (event.type == 'queue:changed' || event.type == 'salon:changed') {
+        _scheduleQueueReload();
+      }
+    });
+    // Keeps "expected wait" counting down between updates.
+    _clock = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _scheduleQueueReload() {
+    _queueReload?.cancel();
+    _queueReload = Timer(const Duration(milliseconds: 300), _loadQueue);
+  }
+
+  Future<void> _loadQueue() async {
+    try {
+      final results = await Future.wait([
+        _repository.fetchQueue(s.id),
+        if (!widget.profile.isGuest) _repository.fetchMyToken(),
+      ]);
+      if (!mounted) return;
+      final mine = results.length > 1 ? results[1] as QueueToken? : null;
+      setState(() {
+        _queue = results[0] as QueueView;
+        _myToken = mine?.salonId == s.id ? mine : null;
+      });
+    } on RepositoryException {
+      // The queue card stays as it was; the next update retries.
+    }
+  }
+
+  Future<void> _joinQueue() async {
+    if (widget.profile.isGuest) {
+      await showSignIn(context);
+      return;
+    }
+    final request = await showDialog<QueueRequest>(
+      context: context,
+      builder: (_) => JoinQueueDialog(
+        salon: s,
+        initialServices: _selected,
+        initialName: widget.profile.fullName,
+      ),
+    );
+    if (request == null || !mounted) return;
+    setState(() => _joining = true);
+    try {
+      final token = await _repository.joinQueue(
+        s.id,
+        serviceIds: request.serviceIds,
+        customerName: request.name.isEmpty ? null : request.name,
+        customerPhone: request.phone.isEmpty ? null : request.phone,
+      );
+      if (!mounted) return;
+      setState(() => _myToken = token);
+      showAppMessage(
+        context,
+        'You are ${token.label} in the queue. We will update your wait live.',
+      );
+      _loadQueue();
+    } on RepositoryException catch (error) {
+      if (mounted) showAppMessage(context, error.message);
+    } finally {
+      if (mounted) setState(() => _joining = false);
+    }
+  }
+
+  Future<void> _leaveQueue(QueueToken token) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text('Leave the queue?'),
+        content: Text(
+          'Token ${token.label} will be cancelled. You can take a new one later.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Stay'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await _repository.tokenAction(token.id, 'cancel');
+      if (!mounted) return;
+      setState(() => _myToken = null);
+      _loadQueue();
+    } on RepositoryException catch (error) {
+      if (mounted) showAppMessage(context, error.message);
+    }
   }
 
   @override
   void dispose() {
     _live?.cancel();
+    _queueReload?.cancel();
+    _clock.cancel();
     super.dispose();
-  }
-
-  Future<void> _loadSlots() async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    try {
-      final taken = await _repository.fetchTakenSlots(
-        today,
-        today.add(const Duration(days: 1)),
-        salonId: s.id,
-      );
-      if (!mounted) return;
-      setState(() {
-        _taken = taken[s.id] ?? {};
-        _loadingSlots = false;
-      });
-    } on RepositoryException catch (error) {
-      if (!mounted) return;
-      setState(() => _loadingSlots = false);
-      showAppMessage(context, error.message);
-    }
   }
 
   Future<void> _reloadSalon() async {
@@ -104,9 +185,7 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
     } on RepositoryException {
       // Salon was deleted or is unreachable; go back to the list.
       if (mounted) Navigator.pop(context);
-      return;
     }
-    await _loadSlots();
   }
 
   Future<void> _open(Uri uri) async {
@@ -114,112 +193,24 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
     if (!ok && mounted) showAppMessage(context, 'Could not open this link');
   }
 
-  Future<void> _book(Slot slot) async {
-    final choice = await showDialog<_PayChoice>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Confirm booking'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(s.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: AppSpacing.s),
-            Text('Today at ${fmtDateTime(slot.start)}'),
-            const SizedBox(height: AppSpacing.s),
-            ..._selected.map((e) => Text('• ${e.name}  ₹${e.price}')),
-            const Divider(),
-            Text(
-              'Total: ₹$_total  (~$_minutes min)',
-              style: const TextStyle(
-                color: AppColors.gold,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.s),
-            Text(
-              onlinePaymentSupported
-                  ? 'Pay now with UPI or card, or pay at the salon.'
-                  : 'Pay at the salon.',
-              style: const TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 12,
-              ),
-            ),
-          ],
+  /// Opens the appointment form for the chosen services (or sign-in first).
+  Future<void> _continue() async {
+    if (widget.profile.isGuest) {
+      await showSignIn(context);
+      return;
+    }
+    final services = s.services.where(_selected.contains).toList();
+    final booked = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BookingFormScreen(
+          salon: s,
+          services: services,
+          profile: widget.profile,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          if (onlinePaymentSupported)
-            OutlinedButton(
-              onPressed: () => Navigator.pop(ctx, _PayChoice.atSalon),
-              child: const Text('Pay at salon'),
-            ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(
-              ctx,
-              onlinePaymentSupported ? _PayChoice.online : _PayChoice.atSalon,
-            ),
-            child: Text(onlinePaymentSupported ? 'Pay now' : 'Confirm'),
-          ),
-        ],
       ),
     );
-    if (choice == null || !mounted) return;
-
-    setState(() => _booking = true);
-    try {
-      final payment = await _repository.createBooking(
-        salonId: s.id,
-        slotStart: slot.start,
-        serviceIds: _selected.map((e) => e.id),
-        payOnline: choice == _PayChoice.online,
-      );
-      if (!mounted) return;
-      setState(() {
-        _taken = {..._taken, slot.start};
-        _selected.clear();
-        _slotStart = null;
-      });
-      if (payment == null) {
-        showAppMessage(
-          context,
-          'Booked at ${fmtDateTime(slot.start)}. See it under My bookings.',
-        );
-        return;
-      }
-
-      final result = await openRazorpayCheckout(payment);
-      if (!mounted) return;
-      if (!result.succeeded) {
-        showAppMessage(
-          context,
-          '${result.error} The slot is held for 15 minutes, then released.',
-        );
-        return;
-      }
-      await _repository.verifyPayment(
-        orderId: result.orderId!,
-        paymentId: result.paymentId!,
-        signature: result.signature!,
-      );
-      if (!mounted) return;
-      showAppMessage(
-        context,
-        'Paid and booked at ${fmtDateTime(slot.start)}. See it under My bookings.',
-      );
-    } on RepositoryException catch (error) {
-      if (!mounted) return;
-      showAppMessage(context, error.message);
-      setState(() => _slotStart = null);
-      _reloadSalon();
-    } finally {
-      if (mounted) setState(() => _booking = false);
-    }
+    if (booked == true && mounted) setState(_selected.clear);
   }
 
   Future<void> _openEditor() async {
@@ -235,12 +226,8 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final slots = s.slotsToday(now, _taken);
-    Slot? chosen;
-    for (final sl in slots) {
-      if (sl.start == _slotStart && !sl.taken) chosen = sl;
-    }
-    final canBook = _selected.isNotEmpty && chosen != null && !_booking;
+    final guest = widget.profile.isGuest;
+    final canContinue = guest || (_selected.isNotEmpty && s.chairs.isNotEmpty);
 
     // Group services by category
     final categories = <String, List<Service>>{};
@@ -252,6 +239,18 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
       appBar: AppBar(
         title: Text(s.name),
         actions: [
+          if (_canManage)
+            IconButton(
+              tooltip: 'Staff dashboard',
+              icon: const Icon(Icons.dashboard_rounded, color: AppColors.gold),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      StaffDashboardScreen(salon: s, profile: widget.profile),
+                ),
+              ),
+            ),
           if (_canManage)
             IconButton(
               tooltip: 'Manage this salon',
@@ -284,9 +283,11 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                       ),
                     ),
                     Text(
-                      chosen == null
-                          ? 'Pick a time slot'
-                          : 'Today ${fmtDateTime(chosen.start)}',
+                      guest
+                          ? 'Sign in to book an appointment'
+                          : s.chairs.isEmpty
+                          ? 'Not taking bookings right now'
+                          : 'Next: pick a date and time',
                       style: const TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 12.5,
@@ -296,23 +297,14 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                 ),
               ),
               ElevatedButton(
-                onPressed: canBook ? () => _book(chosen!) : null,
+                onPressed: canContinue ? _continue : null,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(
                     horizontal: AppSpacing.l,
                     vertical: 14,
                   ),
                 ),
-                child: _booking
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.black,
-                        ),
-                      )
-                    : const Text('Book slot'),
+                child: Text(guest ? 'Sign in to book' : 'Choose time'),
               ),
             ],
           ),
@@ -380,11 +372,56 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
                     ),
                     _stat('${s.queue}', 'in queue'),
                     const SizedBox(width: AppSpacing.l),
-                    _stat('${s.staff}', 'stylists'),
+                    s.chairs.isEmpty
+                        ? _stat('${s.staff}', 'stylists')
+                        : _stat(
+                            '${s.freeChairs}/${s.chairs.length}',
+                            'chairs free',
+                          ),
                   ],
                 ),
               ),
             ),
+            const SizedBox(height: AppSpacing.m),
+            if (_myToken != null)
+              MyTokenCard(
+                token: _myToken!,
+                now: now,
+                onCancel: () => _leaveQueue(_myToken!),
+              )
+            else
+              SalonQueueCard(
+                queue: _queue,
+                joinLabel: widget.profile.isGuest
+                    ? 'Sign in to get a token'
+                    : (_joining ? 'Getting your token…' : 'Get a token'),
+                onJoin:
+                    _joining ||
+                        (_queue != null && (!_queue!.open || _queue!.paused))
+                    ? null
+                    : _joinQueue,
+              ),
+            if (s.chairs.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.m),
+              Row(
+                children: [
+                  const Text(
+                    'Chairs',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(width: AppSpacing.s),
+                  const Text(
+                    'updated live',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.s),
+              ChairAvailability(chairs: s.chairs),
+            ],
             const SizedBox(height: AppSpacing.m),
 
             Row(
@@ -506,60 +543,6 @@ class _SalonDetailPageState extends State<SalonDetailPage> {
               ),
             ],
 
-            // Slots
-            const SizedBox(height: AppSpacing.l),
-            const Text(
-              "Today's available slots",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: AppSpacing.s),
-            if (_loadingSlots)
-              const Padding(
-                padding: EdgeInsets.all(AppSpacing.m),
-                child: Center(
-                  child: CircularProgressIndicator(color: AppColors.gold),
-                ),
-              )
-            else if (slots.isEmpty)
-              Text(
-                s.isOpen(now)
-                    ? 'No more slots today.'
-                    : 'Closed right now. Opens at ${fmtMinutes(s.openMin)}.',
-                style: const TextStyle(color: AppColors.textSecondary),
-              )
-            else ...[
-              Wrap(
-                spacing: AppSpacing.s,
-                runSpacing: AppSpacing.s,
-                children: slots.map((sl) {
-                  final selected = sl.start == _slotStart && !sl.taken;
-                  return ChoiceChip(
-                    label: Text(fmtDateTime(sl.start)),
-                    selected: selected,
-                    showCheckmark: false,
-                    selectedColor: AppColors.gold,
-                    backgroundColor: AppColors.card,
-                    disabledColor: AppColors.surface,
-                    side: BorderSide.none,
-                    labelStyle: TextStyle(
-                      color: sl.taken
-                          ? AppColors.textSecondary
-                          : (selected ? Colors.black : AppColors.textPrimary),
-                      decoration: sl.taken ? TextDecoration.lineThrough : null,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    onSelected: sl.taken
-                        ? null
-                        : (_) => setState(() => _slotStart = sl.start),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: AppSpacing.s),
-              const Text(
-                'Struck-through slots are already booked.',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-              ),
-            ],
             const SizedBox(height: AppSpacing.l),
           ],
         ),

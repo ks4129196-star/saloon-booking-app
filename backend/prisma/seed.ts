@@ -77,7 +77,6 @@ async function main() {
         openMin,
         closeMin,
         staff,
-        queue,
         highlights,
         services: {
           create: menu[kind]!.map(([serviceName, price, minutes, category]) => ({
@@ -85,6 +84,13 @@ async function main() {
             price,
             minutes,
             category,
+          })),
+        },
+        // One chair per stylist; the first few are busy when people queue.
+        chairs: {
+          create: Array.from({ length: staff }, (_, i) => ({
+            name: `Chair ${i + 1}`,
+            status: i < queue ? ('busy' as const) : ('free' as const),
           })),
         },
       },

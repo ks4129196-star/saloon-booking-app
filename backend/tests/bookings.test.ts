@@ -6,9 +6,9 @@ import { Role } from '../src/generated/prisma/enums.js';
 import { app, auth, createSalon, signUp, tomorrowAt } from './helpers.js';
 
 describe('booking a slot', () => {
-  it('prices the booking on the server and marks the slot taken', async () => {
+  it('prices the booking on the server and marks the slots it needs taken', async () => {
     const customer = await signUp('c@example.com');
-    const salon = await createSalon();
+    const salon = await createSalon(null, 1);
     const slot = tomorrowAt(10);
 
     const res = await request(app)
@@ -22,6 +22,8 @@ describe('booking a slot', () => {
       status: 'confirmed',
       payment_method: 'salon',
       salons: { name: 'Test Salon' },
+      chair_id: salon.chairs[0]!.id,
+      chair_name: 'Chair 1',
     });
     expect(res.body.payment).toBeNull();
 
@@ -30,7 +32,11 @@ describe('booking a slot', () => {
       .query({ from: tomorrowAt(0), to: tomorrowAt(23), salon_id: salon.id })
       .set(auth(customer))
       .expect(200);
-    expect(taken.body).toEqual([{ salon_id: salon.id, slot_start: slot }]);
+    // 45 minutes holds the 10:00 and 10:30 blocks of the only chair.
+    expect(taken.body).toEqual([
+      { salon_id: salon.id, slot_start: slot },
+      { salon_id: salon.id, slot_start: tomorrowAt(10).replace('T10:00', 'T10:30') },
+    ]);
 
     const mine = await request(app).get('/bookings/mine').set(auth(customer)).expect(200);
     expect(mine.body).toHaveLength(1);
@@ -39,7 +45,7 @@ describe('booking a slot', () => {
   it('refuses a slot that is already booked', async () => {
     const a = await signUp('a@example.com');
     const b = await signUp('b@example.com');
-    const salon = await createSalon();
+    const salon = await createSalon(null, 1);
     const body = { salon_id: salon.id, slot_start: tomorrowAt(11), service_ids: [salon.services[0]!.id] };
 
     await request(app).post('/bookings').set(auth(a)).send(body).expect(201);
@@ -47,10 +53,10 @@ describe('booking a slot', () => {
     expect(res.body.error).toMatch(/just booked/);
   });
 
-  it('allows only one of two simultaneous bookings for a slot', async () => {
+  it('allows only one of two simultaneous bookings for the last chair', async () => {
     const a = await signUp('a@example.com');
     const b = await signUp('b@example.com');
-    const salon = await createSalon();
+    const salon = await createSalon(null, 1);
     const body = { salon_id: salon.id, slot_start: tomorrowAt(12), service_ids: [salon.services[0]!.id] };
 
     const results = await Promise.all([

@@ -11,6 +11,11 @@ You need Node.js 20+ and a PostgreSQL database.
 **Database.** Any of these works:
 
 - Docker: `docker run -d --name salon-pg -e POSTGRES_USER=salon -e POSTGRES_PASSWORD=salon -e POSTGRES_DB=salon -p 5432:5432 postgres:17-alpine`
+- PostgreSQL installed on Windows: put the user, password and database name
+  you want in `DATABASE_URL`, then run `npm run db:setup-local`. It asks for
+  the `postgres` admin password, creates that user and database, creates the
+  tables and adds the demo salons. Run it again whenever the server logs
+  `password authentication failed`.
 - A free hosted database from [Neon](https://neon.tech), Railway or Render.
   Copy its connection string.
 

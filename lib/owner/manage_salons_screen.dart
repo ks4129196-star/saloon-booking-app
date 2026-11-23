@@ -5,6 +5,7 @@ import '../data/salon_repository.dart';
 import '../models/profile.dart';
 import '../models/salon.dart';
 import 'salon_editor_screen.dart';
+import 'staff_dashboard_screen.dart';
 
 /// Owners see the salons they own; admins see every salon.
 class ManageSalonsScreen extends StatefulWidget {
@@ -47,6 +48,17 @@ class _ManageSalonsScreenState extends State<ManageSalonsScreen> {
       MaterialPageRoute<void>(
         builder: (_) =>
             SalonEditorScreen(profile: widget.profile, salon: salon),
+      ),
+    );
+    if (mounted) _load();
+  }
+
+  Future<void> _openDashboard(Salon salon) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            StaffDashboardScreen(salon: salon, profile: widget.profile),
       ),
     );
     if (mounted) _load();
@@ -121,12 +133,26 @@ class _ManageSalonsScreenState extends State<ManageSalonsScreen> {
                             subtitle: Text(
                               '${s.type} • ${s.services.length} services • '
                               '${s.isOpen(now) ? 'open, ${s.queue} waiting' : 'closed'}'
+                              '${s.chairs.isEmpty ? '' : ' • ${s.freeChairs}/${s.chairs.length} chairs free'}'
                               '${widget.profile.isAdmin && s.ownerId == null ? ' • no owner' : ''}',
                               style: const TextStyle(
                                 color: AppColors.textSecondary,
                               ),
                             ),
-                            trailing: const Icon(Icons.chevron_right_rounded),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Staff dashboard',
+                                  icon: const Icon(
+                                    Icons.dashboard_rounded,
+                                    color: AppColors.gold,
+                                  ),
+                                  onPressed: () => _openDashboard(s),
+                                ),
+                                const Icon(Icons.chevron_right_rounded),
+                              ],
+                            ),
                             onTap: () => _openEditor(s),
                           ),
                         ),

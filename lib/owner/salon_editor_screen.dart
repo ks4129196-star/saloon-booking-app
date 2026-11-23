@@ -4,12 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 
-import '../bookings/my_bookings_screen.dart' show BookingTile, confirmCancelBooking;
+import '../bookings/my_bookings_screen.dart'
+    show BookingTile, confirmCancelBooking;
 import '../core/realtime.dart';
 import '../core/theme.dart';
 import '../data/salon_repository.dart';
 import '../models/profile.dart';
 import '../models/salon.dart';
+import '../salons/chair_widgets.dart';
+import 'staff_dashboard_screen.dart';
 
 const _categories = [
   'Hair',
@@ -37,6 +40,29 @@ class SalonEditorScreen extends StatefulWidget {
 class _SalonEditorScreenState extends State<SalonEditorScreen> {
   final _repository = SalonRepository();
   late Salon? _salon = widget.salon;
+  StreamSubscription<RealtimeEvent>? _live;
+
+  @override
+  void initState() {
+    super.initState();
+    // Another device (say a second stylist's phone) changed a chair or the
+    // salon: show it here too.
+    _live = Realtime.instance.events
+        .where(
+          (event) =>
+              event.type == 'salon:changed' && event.salonId == _salon?.id,
+        )
+        .listen((event) {
+          if (!mounted) return;
+          setState(() => _salon = Salon.fromJson(event.data));
+        });
+  }
+
+  @override
+  void dispose() {
+    _live?.cancel();
+    super.dispose();
+  }
 
   Future<void> _reload() async {
     final id = _salon?.id;
@@ -76,16 +102,34 @@ class _SalonEditorScreenState extends State<SalonEditorScreen> {
     }
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: Text(salon.name),
+          actions: [
+            IconButton(
+              tooltip: 'Staff dashboard',
+              icon: const Icon(Icons.dashboard_rounded, color: AppColors.gold),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => StaffDashboardScreen(
+                    salon: salon,
+                    profile: widget.profile,
+                  ),
+                ),
+              ),
+            ),
+          ],
           bottom: const TabBar(
             indicatorColor: AppColors.gold,
             labelColor: AppColors.gold,
             unselectedLabelColor: AppColors.textSecondary,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
             tabs: [
               Tab(text: 'Details'),
+              Tab(text: 'Chairs'),
               Tab(text: 'Services'),
               Tab(text: 'Bookings'),
             ],
@@ -101,6 +145,7 @@ class _SalonEditorScreenState extends State<SalonEditorScreen> {
                 onCreated: _created,
                 onChanged: _reload,
               ),
+              _ChairsTab(salon: salon, onChanged: _reload),
               _ServicesTab(salon: salon, onChanged: _reload),
               _BookingsTab(salon: salon),
             ],
@@ -155,7 +200,6 @@ class _DetailsTabState extends State<_DetailsTab>
   late String? _ownerId = widget.salon == null
       ? (widget.profile.isAdmin ? null : widget.profile.id)
       : widget.salon!.ownerId;
-  late int _queue = widget.salon?.queue ?? 0;
 
   List<Profile>? _owners;
   bool _saving = false;
@@ -295,20 +339,6 @@ class _DetailsTabState extends State<_DetailsTab>
     }
   }
 
-  Future<void> _changeQueue(int delta) async {
-    final next = (_queue + delta).clamp(0, 500);
-    if (next == _queue) return;
-    final previous = _queue;
-    setState(() => _queue = next);
-    try {
-      await _repository.setQueue(widget.salon!.id, next);
-    } on RepositoryException catch (error) {
-      if (!mounted) return;
-      setState(() => _queue = previous);
-      showAppMessage(context, error.message);
-    }
-  }
-
   Future<void> _delete() async {
     final salon = widget.salon!;
     final ok = await showDialog<bool>(
@@ -357,51 +387,22 @@ class _DetailsTabState extends State<_DetailsTab>
         children: [
           if (!_isNew) ...[
             Card(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.m,
-                  vertical: AppSpacing.s,
+              child: ListTile(
+                leading: const Icon(
+                  Icons.confirmation_number_rounded,
+                  color: AppColors.gold,
                 ),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Live queue',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            'People waiting right now. Customers see this '
-                            'as the wait time.',
-                            style: TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'One less',
-                      onPressed: _queue > 0 ? () => _changeQueue(-1) : null,
-                      icon: const Icon(Icons.remove_circle_outline),
-                    ),
-                    Text(
-                      '$_queue',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.gold,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'One more',
-                      onPressed: () => _changeQueue(1),
-                      icon: const Icon(Icons.add_circle_outline),
-                    ),
-                  ],
+                title: Text(
+                  'Walk-in queue: ${widget.salon!.queue} waiting',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: const Text(
+                  'Customers take tokens in the app; add walk-ins and call '
+                  'the next person from the Staff dashboard.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             ),
@@ -523,9 +524,7 @@ class _DetailsTabState extends State<_DetailsTab>
             child: TextButton.icon(
               onPressed: _locating ? null : _useMyLocation,
               icon: const Icon(Icons.my_location, size: 18),
-              label: Text(
-                _locating ? 'Locating…' : 'Use my current location',
-              ),
+              label: Text(_locating ? 'Locating…' : 'Use my current location'),
             ),
           ),
           const SizedBox(height: AppSpacing.m),
@@ -615,6 +614,352 @@ class _CoordinateField extends StatelessWidget {
         final n = double.tryParse(v?.trim() ?? '');
         return n == null || n.abs() > max ? 'Enter -$max to $max.' : null;
       },
+    );
+  }
+}
+
+// --------------------------------- Chairs ------------------------------------
+
+/// The staff dashboard: each chair with a Free / Busy / Break switch.
+/// Changes show on customers' screens straight away.
+class _ChairsTab extends StatefulWidget {
+  const _ChairsTab({required this.salon, required this.onChanged});
+
+  final Salon salon;
+  final Future<void> Function() onChanged;
+
+  @override
+  State<_ChairsTab> createState() => _ChairsTabState();
+}
+
+class _ChairsTabState extends State<_ChairsTab> {
+  final _repository = SalonRepository();
+
+  /// Changes shown before the server confirms them, by chair id.
+  final _pending = <int, Chair>{};
+  bool _adding = false;
+  late final Timer _clock;
+
+  @override
+  void initState() {
+    super.initState();
+    // Keeps "Busy for 12 min" current.
+    _clock = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _clock.cancel();
+    super.dispose();
+  }
+
+  List<Chair> get _chairs => [
+    for (final chair in widget.salon.chairs) _pending[chair.id] ?? chair,
+  ];
+
+  Future<void> _apply(Chair optimistic, Future<void> Function() request) async {
+    setState(() => _pending[optimistic.id] = optimistic);
+    try {
+      await request();
+      await widget.onChanged();
+    } on RepositoryException catch (error) {
+      if (mounted) showAppMessage(context, error.message);
+    } finally {
+      if (mounted) setState(() => _pending.remove(optimistic.id));
+    }
+  }
+
+  Future<void> _setStatus(Chair chair, ChairStatus status) {
+    if (chair.status == status) return Future.value();
+    return _apply(
+      chair.copyWith(status: status),
+      () => _repository.updateChair(chair.id, status: status),
+    );
+  }
+
+  Future<void> _rename(Chair chair) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => _ChairNameDialog(initial: chair.name),
+    );
+    if (name == null || name == chair.name || !mounted) return;
+    await _apply(
+      chair.copyWith(name: name),
+      () => _repository.updateChair(chair.id, name: name),
+    );
+  }
+
+  Future<void> _add() async {
+    setState(() => _adding = true);
+    try {
+      await _repository.addChair(widget.salon.id);
+      await widget.onChanged();
+    } on RepositoryException catch (error) {
+      if (mounted) showAppMessage(context, error.message);
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+  }
+
+  Future<void> _delete(Chair chair) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text('Remove ${chair.name}?'),
+        content: const Text('Customers will no longer see this chair.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await _repository.deleteChair(chair.id);
+      await widget.onChanged();
+    } on RepositoryException catch (error) {
+      if (mounted) showAppMessage(context, error.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chairs = _chairs;
+    final now = DateTime.now();
+    final free = chairs.where((c) => c.status == ChairStatus.free).length;
+    final busy = chairs.where((c) => c.status == ChairStatus.busy).length;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: AppColors.gold,
+        foregroundColor: Colors.black,
+        onPressed: _adding ? null : _add,
+        icon: _adding
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.black,
+                ),
+              )
+            : const Icon(Icons.add),
+        label: const Text('Add chair'),
+      ),
+      body: chairs.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(AppSpacing.l),
+                child: Text(
+                  'No chairs yet. Add one for each stylist so customers '
+                  'can see who is free.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppColors.textSecondary),
+                ),
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.m,
+                AppSpacing.m,
+                AppSpacing.m,
+                96,
+              ),
+              children: [
+                Text(
+                  '$free free • $busy busy • '
+                  '${chairs.length - free - busy} on break',
+                  style: const TextStyle(color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'Tap a status when a chair changes. Customers see it '
+                  'straight away.',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.m),
+                for (final chair in chairs)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: AppSpacing.s),
+                    child: _ChairCard(
+                      chair: chair,
+                      now: now,
+                      saving: _pending.containsKey(chair.id),
+                      onStatus: (status) => _setStatus(chair, status),
+                      onRename: () => _rename(chair),
+                      onDelete: () => _delete(chair),
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+class _ChairCard extends StatelessWidget {
+  const _ChairCard({
+    required this.chair,
+    required this.now,
+    required this.saving,
+    required this.onStatus,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  final Chair chair;
+  final DateTime now;
+  final bool saving;
+  final ValueChanged<ChairStatus> onStatus;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = chairStatusColor(chair.status);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.m,
+          AppSpacing.s,
+          AppSpacing.xs,
+          AppSpacing.m,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(chairStatusIcon(chair.status), color: color, size: 20),
+                const SizedBox(width: AppSpacing.s),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        chair.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
+                      ),
+                      Text(
+                        '${chair.status.label} ${fmtFor(chair.statusSince, now)}',
+                        style: TextStyle(color: color, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                if (saving)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: AppSpacing.s),
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.gold,
+                      ),
+                    ),
+                  ),
+                IconButton(
+                  tooltip: 'Rename ${chair.name}',
+                  onPressed: onRename,
+                  icon: const Icon(
+                    Icons.edit_outlined,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Remove ${chair.name}',
+                  onPressed: onDelete,
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.s),
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.s + 4),
+              child: ChairStatusSwitch(
+                status: chair.status,
+                onChanged: onStatus,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChairNameDialog extends StatefulWidget {
+  const _ChairNameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_ChairNameDialog> createState() => _ChairNameDialogState();
+}
+
+class _ChairNameDialogState extends State<_ChairNameDialog> {
+  late final _name = TextEditingController(text: widget.initial);
+  final _form = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_form.currentState!.validate()) {
+      Navigator.pop(context, _name.text.trim());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text('Chair name'),
+      content: Form(
+        key: _form,
+        child: TextFormField(
+          controller: _name,
+          autofocus: true,
+          maxLength: 40,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            hintText: 'e.g. Chair 1, or the stylist\'s name',
+          ),
+          validator: (v) =>
+              (v?.trim().isEmpty ?? true) ? 'Enter a name.' : null,
+          onFieldSubmitted: (_) => _save(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(onPressed: _save, child: const Text('Save')),
+      ],
     );
   }
 }
@@ -832,9 +1177,7 @@ class _ServiceDialogState extends State<_ServiceDialog> {
                       controller: _minutes,
                       keyboardType: TextInputType.number,
                       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      decoration: const InputDecoration(
-                        labelText: 'Minutes',
-                      ),
+                      decoration: const InputDecoration(labelText: 'Minutes'),
                       validator: (v) {
                         final n = int.tryParse(v?.trim() ?? '');
                         return n == null || n < 5 || n > 600

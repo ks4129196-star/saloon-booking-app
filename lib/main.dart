@@ -30,6 +30,7 @@ class MyApp extends StatelessWidget {
       title: 'Salon Finder',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
+      // Opens on the salon list; guests can browse, and sign in to book.
       home: const SessionGate(),
     );
   }

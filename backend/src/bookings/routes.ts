@@ -7,13 +7,22 @@ import { prisma } from '../db.js';
 import { PaymentMethod } from '../generated/prisma/enums.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { bookingJson } from '../lib/serialize.js';
-import { activeBookingWhere, cancelBooking, createBooking } from './service.js';
+import { activeBookingWhere, bookingInclude, cancelBooking, createBooking } from './service.js';
 
 const newBooking = z.object({
   salon_id: z.number().int().positive(),
   slot_start: z.iso.datetime({ offset: true }),
   service_ids: z.array(z.number().int().positive()).min(1, 'Select at least one service.').max(20),
   payment_method: z.enum(PaymentMethod).default(PaymentMethod.salon),
+  chair_id: z.number().int().positive().nullish(),
+  customer_name: z.string().trim().max(80).optional(),
+  customer_phone: z
+    .string()
+    .trim()
+    .max(30)
+    .regex(/^[0-9+()\- ]*$/, 'Enter a valid phone number.')
+    .optional(),
+  notes: z.string().trim().max(500).optional(),
 });
 
 const range = z.object({
@@ -22,14 +31,17 @@ const range = z.object({
   salon_id: z.coerce.number().int().positive().optional(),
 });
 
-const since = z.object({ from: z.iso.datetime({ offset: true }) });
-
-const withSalonName = { salon: { select: { name: true } } };
+const since = z.object({
+  from: z.iso.datetime({ offset: true }),
+  to: z.iso.datetime({ offset: true }).optional(),
+});
 
 export const bookingsRouter = Router();
-bookingsRouter.use(requireAuth);
 
-/** Booked slot times only, never who booked them. */
+/**
+ * 30-minute slots in which every chair of a salon is booked. Times only,
+ * never who booked them.
+ */
 bookingsRouter.get('/taken-slots', async (req, res) => {
   const query = range.parse(req.query);
   const from = new Date(query.from);
@@ -37,18 +49,34 @@ bookingsRouter.get('/taken-slots', async (req, res) => {
   if (to <= from || to.getTime() - from.getTime() > 15 * 86_400_000) {
     throw badRequest('Pick a range of at most 15 days.');
   }
-  const rows = await prisma.booking.findMany({
-    where: {
-      ...activeBookingWhere(),
-      slotStart: { gte: from, lt: to },
-      ...(query.salon_id ? { salonId: query.salon_id } : {}),
-    },
-    select: { salonId: true, slotStart: true },
-  });
-  res.json(rows.map((row) => ({ salon_id: row.salonId, slot_start: row.slotStart.toISOString() })));
+  const salonFilter = query.salon_id ? { salonId: query.salon_id } : {};
+  const [rows, chairCounts] = await Promise.all([
+    prisma.bookingSlot.findMany({
+      where: {
+        slotStart: { gte: from, lt: to },
+        booking: { ...activeBookingWhere(), ...salonFilter },
+      },
+      select: { slotStart: true, booking: { select: { salonId: true } } },
+    }),
+    prisma.chair.groupBy({ by: ['salonId'], where: salonFilter, _count: { _all: true } }),
+  ]);
+  const chairs = new Map(chairCounts.map((c) => [c.salonId, c._count._all]));
+  const held = new Map<string, { salonId: number; slotStart: Date; count: number }>();
+  for (const row of rows) {
+    const key = `${row.booking.salonId}|${row.slotStart.getTime()}`;
+    const entry = held.get(key) ?? { salonId: row.booking.salonId, slotStart: row.slotStart, count: 0 };
+    entry.count++;
+    held.set(key, entry);
+  }
+  res.json(
+    [...held.values()]
+      .filter((entry) => entry.count >= (chairs.get(entry.salonId) ?? 0))
+      .sort((a, b) => a.slotStart.getTime() - b.slotStart.getTime() || a.salonId - b.salonId)
+      .map((entry) => ({ salon_id: entry.salonId, slot_start: entry.slotStart.toISOString() })),
+  );
 });
 
-bookingsRouter.post('/', async (req, res) => {
+bookingsRouter.post('/', requireAuth, async (req, res) => {
   const body = newBooking.parse(req.body);
   const user = currentUser(req);
   const { booking, order } = await createBooking(user, {
@@ -56,6 +84,10 @@ bookingsRouter.post('/', async (req, res) => {
     slotStart: new Date(body.slot_start),
     serviceIds: body.service_ids,
     paymentMethod: body.payment_method,
+    chairId: body.chair_id ?? undefined,
+    customerName: body.customer_name,
+    customerPhone: body.customer_phone,
+    notes: body.notes,
   });
   res.status(201).json({
     booking: bookingJson(booking),
@@ -73,23 +105,23 @@ bookingsRouter.post('/', async (req, res) => {
   });
 });
 
-bookingsRouter.get('/mine', async (req, res) => {
+bookingsRouter.get('/mine', requireAuth, async (req, res) => {
   const bookings = await prisma.booking.findMany({
     where: { customerId: currentUser(req).id },
-    include: withSalonName,
+    include: bookingInclude,
     orderBy: { slotStart: 'desc' },
     take: 100,
   });
   res.json(bookings.map(bookingJson));
 });
 
-bookingsRouter.post('/:id/cancel', async (req, res) => {
+bookingsRouter.post('/:id/cancel', requireAuth, async (req, res) => {
   const id = z.uuid().safeParse(req.params.id);
   if (!id.success) throw notFound('Booking not found.');
   res.json(bookingJson(await cancelBooking(currentUser(req), id.data)));
 });
 
-/** A salon's bookings from [from] onwards. Owner of that salon or admin. */
+/** A salon's bookings from [from] (until [to]). Owner of that salon or admin. */
 export const salonBookingsRouter = Router({ mergeParams: true });
 salonBookingsRouter.use(requireAuth);
 
@@ -101,10 +133,13 @@ salonBookingsRouter.get('/', async (req, res) => {
 
   const query = since.parse(req.query);
   const bookings = await prisma.booking.findMany({
-    where: { salonId, slotStart: { gte: new Date(query.from) } },
-    include: withSalonName,
+    where: {
+      salonId,
+      slotStart: { gte: new Date(query.from), ...(query.to ? { lt: new Date(query.to) } : {}) },
+    },
+    include: bookingInclude,
     orderBy: { slotStart: 'asc' },
-    take: 200,
+    take: 500,
   });
   res.json(bookings.map(bookingJson));
 });

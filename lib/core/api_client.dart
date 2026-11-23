@@ -100,6 +100,9 @@ class ApiClient {
   Future<Object?> delete(String path) => _authed('DELETE', path);
 
   /// A request that needs no session (sign-up, login, codes).
+  Future<Object?> getPublic(String path, {Map<String, String>? query}) =>
+      _send('GET', path, query: query);
+
   Future<Object?> postPublic(String path, Object body) =>
       _send('POST', path, body: body);
 

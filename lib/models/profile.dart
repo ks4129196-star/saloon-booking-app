@@ -31,6 +31,7 @@ class Profile {
 
   bool get isAdmin => role == AppRole.admin;
   bool get isOwner => role == AppRole.owner;
+  bool get isGuest => id == 'guest';
 
   /// Owners manage their own salons; admins manage every salon.
   bool get canManageSalons => isOwner || isAdmin;

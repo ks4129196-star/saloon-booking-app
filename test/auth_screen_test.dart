@@ -3,9 +3,13 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flutter_first_app/auth/auth_screen.dart';
+import 'package:flutter_first_app/core/realtime.dart';
 import 'package:flutter_first_app/main.dart';
 
 void main() {
+  // No server in widget tests, so no live-updates connection.
+  setUpAll(() => Realtime.enabled = false);
+
   testWidgets('log in uses an email code by default, password on request', (
     WidgetTester tester,
   ) async {
@@ -26,16 +30,15 @@ void main() {
     expect(find.text('Email me a code instead'), findsOneWidget);
   });
 
-  testWidgets('shows the registration screen when no session is saved', (
+  testWidgets('starts directly on the salon browser without a login page', (
     WidgetTester tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({}); // nothing saved
     await tester.pumpWidget(const MyApp());
-    // Checks the device for a saved session first.
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    expect(find.text('SALONÉ'), findsOneWidget);
-    expect(find.text('Create account'), findsWidgets);
-    expect(find.text('EMAIL ADDRESS'), findsOneWidget);
+    expect(find.text('Salons near you'), findsOneWidget);
+    expect(find.text('Create account'), findsNothing);
+    expect(find.text('Log in'), findsNothing);
   });
 }

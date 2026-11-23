@@ -3,8 +3,8 @@
 // Ported from supabase/migrations. Permissions that Supabase enforced with
 // Row Level Security are now enforced by the API (src/auth/rbac.ts and the
 // route handlers); the database keeps the data checks (CHECK constraints,
-// added as raw SQL in the first migration) and one booking per slot
-// (Booking.activeSlot).
+// added as raw SQL in the first migration) and one booking per chair per
+// 30-minute block (BookingSlot).
 
 generator client {
   provider            = "prisma-client"
@@ -57,6 +57,7 @@ model User {
 
   ownedSalons   Salon[]
   bookings      Booking[]
+  queueTokens   QueueToken[]
   emailCodes    EmailCode[]
   refreshTokens RefreshToken[]
 
@@ -108,16 +109,58 @@ model Salon {
   openMin    Int      @map("open_min")
   closeMin   Int      @map("close_min")
   staff      Int      @default(1)
-  queue      Int      @default(0)
   highlights String[] @default([])
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   owner    User?     @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   services Service[]
   bookings Booking[]
+  chairs   Chair[]
+  tokens   QueueToken[]
 
   @@index([ownerId])
   @@map("salons")
+}
+
+enum ChairStatus {
+  free // ready for the next customer
+  busy // serving a customer
+  on_break // not taking customers for now
+}
+
+/// One chair (and the stylist working it). Staff change its status live and
+/// customers see which chairs are free.
+model Chair {
+  id          Int         @id @default(autoincrement())
+  salonId     Int         @map("salon_id")
+  name        String
+  status      ChairStatus @default(free)
+  statusSince DateTime    @default(now()) @map("status_since") @db.Timestamptz
+
+  salon    Salon         @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+  slots    BookingSlot[]
+  tokens   QueueToken[]
+
+  @@index([salonId])
+  @@map("chairs")
+}
+
+/// One 30-minute block of a chair held by a booking. A booking of 75 minutes
+/// holds three. The primary key means a chair's block can be held by only one
+/// booking, so the database itself prevents double booking. Rows are removed
+/// when the booking is cancelled or its payment hold expires.
+model BookingSlot {
+  chairId   Int      @map("chair_id")
+  slotStart DateTime @map("slot_start") @db.Timestamptz
+  bookingId String   @map("booking_id") @db.Uuid
+
+  chair   Chair   @relation(fields: [chairId], references: [id], onDelete: Cascade)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@id([chairId, slotStart])
+  @@index([bookingId])
+  @@map("booking_slots")
 }
 
 model Service {
@@ -140,10 +183,12 @@ model Booking {
   customerId        String        @map("customer_id") @db.Uuid
   customerEmail     String        @default("") @map("customer_email")
   slotStart         DateTime      @map("slot_start") @db.Timestamptz
-  // Equals slotStart while the booking holds its slot (confirmed or awaiting
-  // payment) and is null once cancelled or expired. Unique per salon, so a
-  // slot can hold only one booking.
-  activeSlot        DateTime?     @map("active_slot") @db.Timestamptz
+  // The chair the appointment is on. Null only for bookings made before
+  // chairs existed, or whose chair was later removed.
+  chairId           Int?          @map("chair_id")
+  customerName      String        @default("") @map("customer_name")
+  customerPhone     String        @default("") @map("customer_phone")
+  notes             String        @default("")
   services          Json          @default("[]")
   total             Int
   minutes           Int
@@ -154,11 +199,53 @@ model Booking {
   razorpayPaymentId String?       @map("razorpay_payment_id")
   createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz
 
-  salon    Salon @relation(fields: [salonId], references: [id], onDelete: Cascade)
-  customer User  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  salon    Salon         @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  customer User          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  chair    Chair?        @relation(fields: [chairId], references: [id], onDelete: SetNull)
+  slots    BookingSlot[]
 
-  @@unique([salonId, activeSlot])
   @@index([salonId, slotStart])
+  @@index([chairId])
   @@index([customerId])
   @@map("bookings")
+}
+
+enum TokenStatus {
+  waiting // in the queue
+  called // asked to come to a chair
+  serving // in the chair
+  done
+  no_show
+  cancelled
+}
+
+/// A walk-in queue ticket. Numbers restart at 1 each day per salon. Taken by
+/// a customer in the app, or added by staff for someone at the door (no
+/// customerId). How many are waiting is counted from these, never stored.
+model QueueToken {
+  id            String      @id @default(uuid()) @db.Uuid
+  salonId       Int         @map("salon_id")
+  /// The salon's local calendar day, e.g. "2026-11-22".
+  day           String
+  number        Int
+  customerId    String?     @map("customer_id") @db.Uuid
+  customerName  String      @default("") @map("customer_name")
+  customerPhone String      @default("") @map("customer_phone")
+  services      Json        @default("[]")
+  minutes       Int
+  status        TokenStatus @default(waiting)
+  chairId       Int?        @map("chair_id")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  calledAt      DateTime?   @map("called_at") @db.Timestamptz
+  startedAt     DateTime?   @map("started_at") @db.Timestamptz
+  finishedAt    DateTime?   @map("finished_at") @db.Timestamptz
+
+  salon    Salon  @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  customer User?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  chair    Chair? @relation(fields: [chairId], references: [id], onDelete: SetNull)
+
+  @@unique([salonId, day, number])
+  @@index([salonId, day, status])
+  @@index([customerId, status])
+  @@map("queue_tokens")
 }

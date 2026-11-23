@@ -26,7 +26,7 @@ beforeEach(async () => {
   sentCodes.clear();
   mailShouldFail = false;
   await prisma.$executeRawUnsafe(
-    'TRUNCATE "bookings", "services", "salons", "email_codes", "refresh_tokens", "users" RESTART IDENTITY CASCADE',
+    'TRUNCATE "queue_tokens", "booking_slots", "bookings", "chairs", "services", "salons", "email_codes", "refresh_tokens", "users" RESTART IDENTITY CASCADE',
   );
 });
 
@@ -61,8 +61,8 @@ export async function signUp(email: string, role: Role = Role.customer): Promise
 
 export const auth = (user: TestUser) => ({ Authorization: `Bearer ${user.token}` });
 
-/** A salon open around the clock (UTC) with two services. */
-export async function createSalon(owner: TestUser | null = null) {
+/** A salon open around the clock (UTC) with two services and [chairs] chairs. */
+export async function createSalon(owner: TestUser | null = null, chairs = 2) {
   return prisma.salon.create({
     data: {
       ownerId: owner?.id ?? null,
@@ -78,8 +78,9 @@ export async function createSalon(owner: TestUser | null = null) {
           { name: 'Shave', price: 150, minutes: 15, category: 'Grooming' },
         ],
       },
+      chairs: { create: Array.from({ length: chairs }, (_, i) => ({ name: `Chair ${i + 1}` })) },
     },
-    include: { services: { orderBy: { id: 'asc' } } },
+    include: { services: { orderBy: { id: 'asc' } }, chairs: { orderBy: { id: 'asc' } } },
   });
 }
 

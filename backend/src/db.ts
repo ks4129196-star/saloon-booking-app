@@ -12,3 +12,15 @@ export const prisma = new PrismaClient({
 });
 
 export type Db = typeof prisma;
+
+/** True when a trivial query succeeds; logs the reason when it does not. */
+export async function databaseReachable(): Promise<boolean> {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return true;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message.trim().split('\n').pop() : String(error);
+    console.error(`Database check failed: ${reason}`);
+    return false;
+  }
+}

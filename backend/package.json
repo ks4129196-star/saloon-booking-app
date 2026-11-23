@@ -16,6 +16,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
+    "db:setup-local": "powershell -NoProfile -ExecutionPolicy Bypass -File prisma/setup-local-db.ps1",
     "make-admin": "tsx prisma/make-admin.ts",
     "test": "vitest run"
   },

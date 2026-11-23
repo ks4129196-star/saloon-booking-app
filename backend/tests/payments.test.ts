@@ -26,7 +26,7 @@ const sign = (orderId: string, paymentId: string) =>
 
 async function bookOnline(slotHour = 16) {
   const customer = await signUp('c@example.com');
-  const salon = await createSalon();
+  const salon = await createSalon(null, 1); // one chair: a hold blocks the time
   const res = await request(app)
     .post('/bookings')
     .set(auth(customer))
@@ -96,6 +96,7 @@ describe('online payment with Razorpay', () => {
     });
     await expireStaleHolds();
     expect((await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } })).status).toBe('expired');
+    expect(await prisma.bookingSlot.count({ where: { bookingId: booking.id } })).toBe(0);
 
     const other = await signUp('d@example.com');
     await request(app)
